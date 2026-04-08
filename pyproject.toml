@@ -1,0 +1,21 @@
+[project]
+name = "warroom"
+version = "0.1.0"
+description = "AI Agent 기반 서비스 장애 탐지 및 대응 자동화"
+requires-python = ">=3.13"
+dependencies = [
+    "warroom-common",
+    "warroom-gateway",
+    "warroom-orchestrator",
+    "warroom-chatops",
+    "python-dotenv",
+]
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+warroom-common = { workspace = true }
+warroom-gateway = { workspace = true }
+warroom-orchestrator = { workspace = true }
+warroom-chatops = { workspace = true }
