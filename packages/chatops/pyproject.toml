@@ -1,0 +1,11 @@
+[project]
+name = "warroom-chatops"
+version = "0.1.0"
+description = "ChatOps Interface - Notifier and Action Handler"
+requires-python = ">=3.13"
+dependencies = [
+    "warroom-common",
+]
+
+[tool.uv.sources]
+warroom-common = { workspace = true }
