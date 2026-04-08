@@ -1,0 +1,14 @@
+[project]
+name = "warroom-gateway"
+version = "0.1.0"
+description = "Event Gateway - FastAPI webhook receiver"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "python-dotenv",
+    "warroom-common",
+]
+
+[tool.uv.sources]
+warroom-common = { workspace = true }
