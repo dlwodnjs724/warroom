@@ -38,7 +38,7 @@ if not _USE_MOCK:
 
 from gateway.parsers import sentry as sentry_parser
 from orchestrator.runner import run_pipeline
-from chatops.console import ConsoleNotifier
+from chatops.factory import make_notifier
 
 
 # Mock Sentry webhook 페이로드
@@ -95,7 +95,7 @@ def human_approval(report) -> bool:
 
 
 def main():
-    notifier = ConsoleNotifier()
+    notifier = make_notifier()
 
     print("\n[WARROOM] 프로토타입 시작")
     print("[WARROOM] Mock Sentry 페이로드로 파이프라인을 실행합니다.\n")

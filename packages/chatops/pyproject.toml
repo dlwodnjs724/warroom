@@ -5,6 +5,7 @@ description = "ChatOps Interface - Notifier and Action Handler"
 requires-python = ">=3.13"
 dependencies = [
     "warroom-common",
+    "httpx",
 ]
 
 [tool.uv.sources]

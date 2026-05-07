@@ -2834,11 +2834,15 @@ name = "warroom-chatops"
 version = "0.1.0"
 source = { virtual = "packages/chatops" }
 dependencies = [
+    { name = "httpx" },
     { name = "warroom-common" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "warroom-common", virtual = "packages/common" }]
+requires-dist = [
+    { name = "httpx" },
+    { name = "warroom-common", virtual = "packages/common" },
+]
 
 [[package]]
 name = "warroom-common"

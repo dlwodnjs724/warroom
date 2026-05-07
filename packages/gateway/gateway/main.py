@@ -25,10 +25,10 @@ from gateway.store import incident_store
 
 # orchestrator는 import 지연 (LLM 초기화 비용)
 def _run_pipeline(event: IncidentEvent) -> None:
-    from chatops.console import ConsoleNotifier
+    from chatops.factory import make_notifier
     from orchestrator.runner import run_pipeline
 
-    notifier = ConsoleNotifier()
+    notifier = make_notifier()
     try:
         incident_store.update_status(event.incident_id, IncidentStatus.ANALYZING)
         report = run_pipeline(event, notifier)
