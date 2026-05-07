@@ -19,3 +19,9 @@ warroom-common = { workspace = true }
 warroom-gateway = { workspace = true }
 warroom-orchestrator = { workspace = true }
 warroom-chatops = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "markdown>=3.10.2",
+    "pytest>=9.0.3",
+]
