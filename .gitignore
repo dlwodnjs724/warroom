@@ -18,6 +18,7 @@ output/
 # 수업 자료 및 제출물
 lecture_notes/
 submission/
+references/
 
 # macOS
 .DS_Store
@@ -25,3 +26,4 @@ submission/
 # IDE
 .idea/
 .vscode/
+.claude/
