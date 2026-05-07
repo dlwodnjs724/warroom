@@ -36,7 +36,9 @@ if not _USE_MOCK:
     print(f"  Analyst: {_models['analyst']}")
     print(f"  Fixer  : {_models['fixer']}")
 
+from common.models import IncidentStatus
 from gateway.parsers import sentry as sentry_parser
+from gateway.store import incident_store
 from orchestrator.runner import run_pipeline
 from chatops.factory import make_notifier
 
@@ -56,9 +58,8 @@ MOCK_SENTRY_PAYLOAD = {
 }
 
 
-def save_report(report) -> Path:
-    """결과 리포트를 JSON 파일로 저장."""
-    # TODO: RDB 저장으로 교체
+def save_report_json(report) -> Path:
+    """결과 리포트를 JSON 파일로도 보관 (개발자 가독용)."""
     output_dir = Path("output")
     output_dir.mkdir(exist_ok=True)
 
@@ -102,21 +103,28 @@ def main():
 
     # 1. 파싱
     event = sentry_parser.parse(MOCK_SENTRY_PAYLOAD)
+    incident_store.add(event)
     notifier.on_incident_received(event)
 
     # 2. 에이전트 파이프라인
     try:
+        incident_store.update_status(event.incident_id, IncidentStatus.ANALYZING)
         report = run_pipeline(event, notifier)
+        incident_store.save_report(event.incident_id, report)
+        incident_store.update_status(event.incident_id, IncidentStatus.AWAITING_APPROVAL)
     except Exception as e:
+        incident_store.update_status(event.incident_id, IncidentStatus.FAILED)
         print(f"\n[오류] 파이프라인 실행 실패: {e}")
         sys.exit(1)
 
     # 3. Human-in-the-Loop
     approved = human_approval(report)
     report.is_approved = approved
+    final_status = IncidentStatus.APPROVED if approved else IncidentStatus.REJECTED
+    incident_store.update_status(event.incident_id, final_status, is_approved=approved)
 
-    # 4. 저장
-    path = save_report(report)
+    # 4. JSON 산출물 (가독용 보조 출력)
+    path = save_report_json(report)
 
     if approved:
         print(f"\n[WARROOM] 승인 완료. 리포트 저장: {path}")
