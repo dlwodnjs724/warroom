@@ -45,8 +45,11 @@ Sentry 등 모니터링 도구의 웹훅을 수신하여 멀티 에이전트 AI 
 |------|------|
 | Event Gateway | FastAPI + BackgroundTasks |
 | AI Orchestration | CrewAI (Sequential Process) |
-| LLM | Anthropic Claude Sonnet 4.6 |
+| LLM (PoC 기본) | Google Gemini 2.5 Flash / Flash-Lite (Free Tier) |
+| LLM (운영 권장) | Anthropic Claude Sonnet 4.6 + Haiku 4.5 |
 | Package Manager | uv workspace (Python 3.13) |
+
+LLM provider는 환경변수로 전환 (`LLM_PROVIDER=gemini|anthropic|ollama`). Triage·Analyst·Fixer 에이전트별로 모델을 분리해 비용을 최적화한다.
 
 ## Quick Start
 
@@ -57,8 +60,10 @@ uv pip install -e packages/common -e packages/gateway -e packages/orchestrator -
 
 # 2. 환경변수 설정
 cp .env.example .env
-# .env에 ANTHROPIC_API_KEY 입력
-# 프로토타입 테스트는 MOCK_PIPELINE=true
+# 기본은 Gemini Free Tier — .env 에 GEMINI_API_KEY 입력
+#   (https://aistudio.google.com/apikey 에서 발급, 무료)
+# Anthropic 사용 시: LLM_PROVIDER=anthropic + ANTHROPIC_API_KEY 입력
+# 비용 없이 흐름만 검증할 때: MOCK_PIPELINE=true
 
 # 3-a. 서버 실행
 uv run serve.py

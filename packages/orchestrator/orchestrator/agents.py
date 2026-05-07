@@ -1,10 +1,8 @@
-from crewai import Agent, LLM
+from crewai import Agent
+
+from .llm import analyst_llm, fixer_llm, triage_llm
 from .tools.sentry import sentry_issue_lookup
 from .tools.github import github_source_lookup
-
-
-def make_llm() -> LLM:
-    return LLM(model="anthropic/claude-sonnet-4-6")
 
 
 def make_triage_agent() -> Agent:
@@ -26,7 +24,7 @@ def make_triage_agent() -> Agent:
             "- 최초 발생 시각 (UTC 기준)\n"
             "- 트리거 후보 이벤트 (배포, 설정 변경 등)"
         ),
-        llm=make_llm(),
+        llm=triage_llm(),
         verbose=True,
     )
 
@@ -53,7 +51,7 @@ def make_analyst_agent() -> Agent:
             "3. 수집된 증거를 바탕으로 각 가설의 증거 레벨 평가"
         ),
         tools=[sentry_issue_lookup, github_source_lookup],
-        llm=make_llm(),
+        llm=analyst_llm(),
         verbose=True,
     )
 
@@ -78,6 +76,6 @@ def make_fixer_agent() -> Agent:
             "4. 장기 액션 (1~3개월): 아키텍처/문화적 개선\n"
             "각 액션은 SMART 원칙(Specific, Measurable, Achievable, Relevant, Time-bound)을 따르세요."
         ),
-        llm=make_llm(),
+        llm=fixer_llm(),
         verbose=True,
     )

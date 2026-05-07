@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Multi-Agent Orchestration - CrewAI pipeline"
 requires-python = ">=3.13"
 dependencies = [
-    "crewai",
+    "crewai[google-genai]",
     "anthropic",
     "python-dotenv",
     "warroom-common",

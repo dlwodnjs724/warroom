@@ -4,8 +4,11 @@ warroom 프로토타입 실행 진입점.
 사용법:
     uv run demo.py
 
-환경변수:
-    ANTHROPIC_API_KEY  (필수)
+환경변수 (.env 참고):
+    LLM_PROVIDER         gemini | anthropic | ollama (기본: gemini)
+    GEMINI_API_KEY       provider=gemini 일 때 필수
+    ANTHROPIC_API_KEY    provider=anthropic 일 때 필수
+    MOCK_PIPELINE        true 이면 LLM 호출 없이 mock 응답 사용
 """
 import json
 import os
@@ -16,10 +19,22 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-if not os.getenv("ANTHROPIC_API_KEY"):
-    print("[오류] ANTHROPIC_API_KEY 환경변수가 설정되지 않았습니다.")
-    print("  .env 파일에 ANTHROPIC_API_KEY=sk-ant-... 를 추가하세요.")
-    sys.exit(1)
+_USE_MOCK = os.getenv("MOCK_PIPELINE", "false").lower() == "true"
+
+if not _USE_MOCK:
+    from orchestrator.llm import required_api_key_env, selected_models
+
+    api_key_env = required_api_key_env()
+    if api_key_env and not os.getenv(api_key_env):
+        print(f"[오류] {api_key_env} 환경변수가 설정되지 않았습니다.")
+        print(f"  .env 파일에 {api_key_env}=... 를 추가하세요.")
+        sys.exit(1)
+
+    _models = selected_models()
+    print(f"[WARROOM] LLM Provider: {_models['provider']}")
+    print(f"  Triage : {_models['triage']}")
+    print(f"  Analyst: {_models['analyst']}")
+    print(f"  Fixer  : {_models['fixer']}")
 
 from gateway.parsers import sentry as sentry_parser
 from orchestrator.runner import run_pipeline
