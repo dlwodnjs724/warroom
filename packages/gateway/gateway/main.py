@@ -3,6 +3,7 @@ Event Gateway — FastAPI webhook receiver.
 
 엔드포인트:
   POST /webhook/sentry          Sentry 웹훅 수신
+  POST /webhook/datadog         Datadog 웹훅 수신
   GET  /incidents               처리된 인시던트 목록
   POST /incidents/{id}/approve  패치 제안 승인
   POST /incidents/{id}/reject   패치 제안 반려
@@ -18,6 +19,7 @@ from fastapi.responses import JSONResponse
 load_dotenv()
 
 from common.models import IncidentEvent, IncidentStatus
+from gateway.parsers import datadog as datadog_parser
 from gateway.parsers import sentry as sentry_parser
 from gateway.store import incident_store
 
@@ -51,6 +53,15 @@ app = FastAPI(title="Warroom Event Gateway", lifespan=lifespan)
 async def webhook_sentry(payload: dict[str, Any], background_tasks: BackgroundTasks):
     """Sentry 웹훅 수신 — 즉시 202 반환 후 백그라운드에서 파이프라인 실행."""
     event = sentry_parser.parse(payload)
+    incident_store.add(event)
+    background_tasks.add_task(_run_pipeline, event)
+    return {"incident_id": event.incident_id, "status": "accepted"}
+
+
+@app.post("/webhook/datadog", status_code=202)
+async def webhook_datadog(payload: dict[str, Any], background_tasks: BackgroundTasks):
+    """Datadog 웹훅 수신 — Monitor/Incident 페이로드 모두 처리."""
+    event = datadog_parser.parse(payload)
     incident_store.add(event)
     background_tasks.add_task(_run_pipeline, event)
     return {"incident_id": event.incident_id, "status": "accepted"}
