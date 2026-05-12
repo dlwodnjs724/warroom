@@ -156,13 +156,34 @@ flowchart TD
 | 0.3 | GitHub App + 데모 레포 install + private key | `.env`, `.secrets/` |
 | 0.4 | (선택) Anthropic 잔액 충전 — 시연 직전 | — |
 
-### Phase 1 — Triage 단단하게 (2~3시간)
+### Phase 1 — Triage 단단하게 (완료)
 
-- **1.1** Fingerprint dedupe — 같은 issue_id 처리 중이면 카운터만 +1
-- **1.2** Triage 출력에 `category` 필드 (code/infra/external/operational)
-- **1.3** category != code 시 Fixer skip, status `triaged_only`
-- **1.4** 테스트 보강
-- **1.5** Sentry/Datadog webhook 서명 검증 (signing secret 환경변수)
+- **1.1** ✅ Fingerprint dedupe — 같은 issue_id 처리 중이면 카운터만 +1
+- **1.2** ✅ Triage 출력에 `category` 필드 (code/infra/external/operational)
+- **1.3** ✅ category != code 시 Fixer skip, 분석 리포트만
+- **1.4** ✅ 테스트 보강
+- **1.5** ✅ Sentry/Datadog webhook 서명 검증 (signing secret 환경변수)
+  - 대안 아키텍처: 내부망 한정이면 mTLS / bearer token 으로 대체 가능. Slack 경유(Sentry→Slack→우리)는 데이터 충실도/latency/의존성 측면에서 권장 안 함
+
+### Phase 1.6 — 구조 정리 (DB 레이어 + 테스트 격리, 4시간)
+
+- **1.6.1** 테스트를 패키지별 디렉토리로 이동 (hybrid: 단일패키지 → 패키지 내, 통합 → top-level)
+- **1.6.2** SQLAlchemy 2.0 모델 정의 + 패키지 구조
+- **1.6.3** Alembic 도입 + 초기 revision (현 schema 캡처)
+- **1.6.4** `DATABASE_URL` 환경변수 분기 — dev/prod=MySQL, test=in-memory SQLite
+- **1.6.5** store.py 를 async SQLAlchemy 로 포팅 (`threading.Lock` 제거)
+- **1.6.6** docker-compose.yml (MySQL 8.0) — local dev/시연용
+- **1.6.7** 테스트 갱신 (in-memory SQLite + 트랜잭션 롤백 fixture)
+- **1.6.8** README / .env.example / plan.md 갱신
+
+환경 매트릭스:
+
+| 환경 | DB | 이유 |
+|---|---|---|
+| Test (unit) / CI | `sqlite+aiosqlite:///:memory:` | 빠름, 격리, 셋업 zero |
+| Local dev | `mysql+aiomysql://...` (docker-compose) | dev/prod parity, quirk 조기 발견 |
+| Demo / 시연 | `mysql+aiomysql://...` | 운영 가정 |
+| Alembic migration smoke | MySQL 컨테이너 | `alembic upgrade head` 안전성 검증 |
 
 ### Phase 2 — Slack 가시성 (3~4시간) ★ Phase 0.1 선행 필요
 
@@ -260,3 +281,4 @@ flowchart LR
 |---|---|
 | 2026-05-13 | 초기 작성. Phase 0~5 정의, 사용자 시나리오 + gap analysis 포함 |
 | 2026-05-13 | 최종 검토 반영: Phase 1.5(서명검증), 2.6/2.7(에러알림·truncate), 4.0(mock→real), 4.6(redaction), 5.5~5.7(정리) 추가. Agent 활용 지점 명시 |
+| 2026-05-13 | Phase 1 완료 (5 commits, 104 tests). Phase 1.6 추가 — DB 레이어 SQLAlchemy/Alembic, MySQL dev/prod + in-memory SQLite test, 테스트 패키지별 격리 |
