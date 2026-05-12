@@ -2,89 +2,125 @@
 
 ## 개요
 
-Sentry 등 모니터링 툴의 웹훅을 시작점으로, 3개의 AI 에이전트가 순차 협업하여 근본 원인 분석 → 패치 제안까지 자동화. 최종 패치는 개발자 승인 후에만 적용된다.
+Sentry/Datadog 의 webhook 을 시작점으로, 3개의 AI 에이전트가 순차 협업하여 근본 원인 분석 → 패치 제안까지 자동화. 개발자 승인 후 GitHub App 이 PR 을 자동 생성한다.
 
+## 컴포넌트
+
+```mermaid
+flowchart LR
+    subgraph Sources [모니터링 소스]
+        S[Sentry]
+        D[Datadog]
+    end
+
+    subgraph Warroom
+        GW[Gateway<br/>FastAPI + BackgroundTasks]
+        STORE[(IncidentStore<br/>SQLite)]
+        ORCH[Orchestrator<br/>CrewAI Sequential]
+        NOTIF[ChatOps<br/>Console + Slack]
+        GH[GitHub Client<br/>App / Dry-run]
+    end
+
+    subgraph External
+        SL[Slack Webhook]
+        REPO[GitHub Repo]
+    end
+
+    S -->|webhook| GW
+    D -->|webhook| GW
+    GW <--> STORE
+    GW -->|BackgroundTask| ORCH
+    ORCH --> NOTIF
+    ORCH -->|save_report| STORE
+    NOTIF --> SL
+    GW -->|on approve| GH
+    GH --> REPO
 ```
-[Sentry webhook]
-      │
-      ▼
-┌─────────────┐    202 즉시 반환
-│   Gateway   │ ──────────────────→ (webhook sender)
-│  (FastAPI)  │
-└──────┬──────┘
-       │ BackgroundTask
-       ▼
-┌─────────────────────────────────┐
-│        Orchestrator (CrewAI)    │
-│                                 │
-│  Triage Agent                   │
-│    └─ 심각도 분류, 초기 브리핑   │
-│         │                       │
-│  Analyst Agent                  │
-│    ├─ Tool: Sentry Lookup       │
-│    └─ Tool: GitHub Lookup       │
-│         │ 근본 원인 분석         │
-│  Fixer Agent                    │
-│    └─ 패치 코드 + 포스트모템     │
-└──────────────┬──────────────────┘
-               │
-               ▼
-        ┌─────────────┐
-        │   ChatOps   │  ConsoleNotifier (→ Slack 확장)
-        └─────────────┘
-               │
-               ▼
-     awaiting_approval 상태
-               │
-    ┌──────────┴──────────┐
-    │                     │
- approve               reject
-    │
- (TODO: Jira 티켓)
+
+## 처리 흐름 (수신 → PR 생성)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Mon as Sentry/Datadog
+    participant GW as Gateway
+    participant Store as SqliteIncidentStore
+    participant Pipe as Orchestrator
+    participant Notif as Notifier
+    participant Dev as 개발자
+    participant GH as GitHubAppClient
+
+    Mon->>GW: POST /webhook/{sentry,datadog}
+    GW->>Store: add(IncidentEvent)
+    GW-->>Mon: 202 Accepted (즉시)
+
+    rect rgba(200,220,255,0.3)
+        Note over GW,Pipe: BackgroundTask
+        GW->>Pipe: run_pipeline(event)
+        Pipe->>Notif: on_incident_received
+        Pipe->>Pipe: Triage → Analyst → Fixer
+        Pipe->>Store: save_report + AWAITING_APPROVAL
+        Pipe->>Notif: on_resolution_ready (Block Kit)
+        Notif->>Dev: Slack 알림 (✅/❌ 버튼)
+    end
+
+    Dev->>GW: POST /incidents/{id}/approve
+    GW->>Store: status=APPROVED
+    GW->>GH: create_patch_pr(report, repo)
+    GH->>GH: JWT → installation token
+    GH->>GH: base SHA → branch → file commit → PR open
+    GH-->>GW: PullRequestResult
+    GW-->>Dev: { pull_request: {url, branch, ...} }
 ```
 
 ## 패키지 구조
 
 ```
 packages/
-├── common/          # 공유 모델
-│   └── models.py    # IncidentEvent, ResolutionReport, Severity, IncidentStatus
+├── common/          # 공유 모델 (IncidentEvent, ResolutionReport, Severity, Status)
 │
 ├── gateway/         # Event Gateway
-│   ├── main.py      # FastAPI 앱, 엔드포인트 정의
-│   ├── store.py     # 인메모리 인시던트 스토어 (→ RDB 확장)
+│   ├── main.py      # FastAPI 엔드포인트 (webhook, incidents, approve/reject)
+│   ├── store.py     # IncidentStore Protocol + InMemory / Sqlite 백엔드
 │   └── parsers/
-│       └── sentry.py  # Sentry 페이로드 → IncidentEvent (→ datadog.py 추가)
+│       ├── sentry.py
+│       └── datadog.py
 │
 ├── orchestrator/    # Multi-Agent Pipeline
-│   ├── agents.py    # Triage / Analyst / Fixer 에이전트 정의
-│   ├── runner.py    # Crew 조립 + 실행 (mock/real 분기)
-│   └── tools/
-│       ├── sentry.py  # Sentry Issue Lookup (현재 Mock)
-│       └── github.py  # GitHub Source Lookup (현재 Mock)
+│   ├── agents.py    # Triage / Analyst / Fixer (LLM provider 주입)
+│   ├── runner.py    # Crew 조립, mock/real 분기
+│   ├── llm.py       # Gemini / Anthropic / Ollama 추상화
+│   └── tools/       # Sentry / GitHub lookup (현재 mock)
 │
-└── chatops/         # Notifier Interface
-    ├── base.py      # Notifier ABC
-    └── console.py   # ConsoleNotifier (→ slack.py 추가)
+├── chatops/         # Notifier
+│   ├── base.py
+│   ├── console.py
+│   ├── slack.py     # Block Kit + Incoming Webhook (dry-run 폴백)
+│   └── factory.py   # WARROOM_NOTIFIER=console|slack|both
+│
+└── github/          # PR 자동 생성
+    ├── base.py      # GitHubClient Protocol + PullRequestResult
+    ├── app.py       # GitHub App (JWT → installation token → REST)
+    ├── dry_run.py   # 페이로드/마크다운 파일 출력 (App 미설정 시)
+    ├── report.py    # ResolutionReport → markdown / PR title/body
+    └── factory.py   # make_github_client()
 ```
-
-## 데이터 흐름
-
-1. `POST /webhook/sentry` → `sentry_parser.parse()` → `IncidentEvent`
-2. `IncidentEvent` → `run_pipeline()` → 에이전트 순차 실행
-3. 각 에이전트 결과 → `ResolutionReport` 조립
-4. `notifier.on_resolution_ready()` → 출력
-5. `status: awaiting_approval` 대기
-6. `POST /incidents/{id}/approve` or `/reject` → 최종 처리
 
 ## 확장 포인트
 
 | 항목 | 위치 | 방법 |
 |------|------|------|
-| Datadog 웹훅 | `gateway/parsers/datadog.py` | `parse()` 동일 인터페이스 구현 |
-| Slack 알림 | `chatops/slack.py` | `Notifier` ABC 구현 |
-| RDB 저장 | `gateway/store.py` | `IncidentStore` 클래스 교체 |
-| Jira 연동 | `gateway/main.py` approve 핸들러 | TODO 주석 위치 참고 |
-| 실제 LLM | `.env` `MOCK_PIPELINE=false` | Anthropic API 크레딧 필요 |
-| 실제 Sentry API | `orchestrator/tools/sentry.py` | TODO 주석 위치 교체 |
-| 실제 GitHub API | `orchestrator/tools/github.py` | TODO 주석 위치 교체 |
+| Sentry SaaS 실 webhook | `gateway/parsers/sentry.py` | 서명 검증 추가 |
+| Slack 실 송신 | `.env` `SLACK_WEBHOOK_URL` 설정 | URL 있으면 자동 송신, 없으면 dry-run |
+| GitHub App 실 PR | `.env` `GITHUB_APP_*` + `GITHUB_REPO` | App 설치 후 credentials 채움 |
+| Jira 티켓 생성 | `gateway.main._handle_decision` approve 분기 | GitHub PR 옆에 추가 |
+| 멀티 레포 매핑 | `gateway.main._open_pr` | service → repo YAML 매핑 (현재 단일 `GITHUB_REPO`) |
+| 실 LLM 호출 | `.env` `MOCK_PIPELINE=false` + provider key | Gemini Free / Anthropic |
+| 실 Sentry/GitHub Tool | `orchestrator/tools/{sentry,github}.py` | mock 함수 교체 |
+
+## 비기능 요구사항
+
+- Webhook 수신 후 **1초 이내 202 반환** (BackgroundTasks 분리)
+- 외부 API 실패 시 크래시 없이 dry-run 폴백 (Slack, GitHub 모두)
+- API Key/Private Key 는 `.env` / `.secrets/` 만, 코드 하드코딩 금지
+- Fixer 출력 코드는 PR 본문에 첨부되며 자동 merge 없음 (HITL 필수)
