@@ -128,6 +128,13 @@ flowchart TD
 | 11 | PR cleanup | 없음 | 거절 시 PR close + branch 삭제 | `github/app.py` | 4.4 |
 | 12 | Incident resolved 자동 전이 | 없음 | metric 회복 확인 (범위 밖, 명시만) | architecture 문서 | 5.1 |
 
+**본 프로젝트 범위 밖 (문서에만 명시)**:
+- 영구 운영 환경 호스팅 (Heroku/Fly.io/VPS) — 시연은 ngrok 으로
+- 멀티 테넌시 / org 분리
+- Rate limiting / abuse 방어
+- HTTP `/approve` endpoint 인증 — Slack Interactivity 가 메인 경로가 되므로 HTTP 는 dev 한정
+- Sentry `issue.resolved` 역방향 webhook — metric 검증으로 대체
+
 **현재 즉시 사용 가능 (변경 없이 시연 가능)**:
 - Sentry/Datadog webhook 수신, `IncidentEvent` 파싱
 - Triage/Analyst/Fixer LLM 파이프라인 (Gemini Free 검증 완료)
@@ -149,20 +156,23 @@ flowchart TD
 | 0.3 | GitHub App + 데모 레포 install + private key | `.env`, `.secrets/` |
 | 0.4 | (선택) Anthropic 잔액 충전 — 시연 직전 | — |
 
-### Phase 1 — Triage 단단하게 (1~2시간)
+### Phase 1 — Triage 단단하게 (2~3시간)
 
 - **1.1** Fingerprint dedupe — 같은 issue_id 처리 중이면 카운터만 +1
 - **1.2** Triage 출력에 `category` 필드 (code/infra/external/operational)
 - **1.3** category != code 시 Fixer skip, status `triaged_only`
 - **1.4** 테스트 보강
+- **1.5** Sentry/Datadog webhook 서명 검증 (signing secret 환경변수)
 
-### Phase 2 — Slack 가시성 (2~3시간) ★ Phase 0.1 선행 필요
+### Phase 2 — Slack 가시성 (3~4시간) ★ Phase 0.1 선행 필요
 
 - **2.1** `SlackNotifier` 를 `chat.postMessage` 기반으로 재작성
 - **2.2** 에이전트 진행은 thread reply
 - **2.3** 최종 결과는 메인 메시지 `chat.update`
-- **2.4** thread_ts 영속화 (store schema)
+- **2.4** thread_ts 영속화 (store schema) — 컬럼 추가용 마이그레이션 함수 1개 추가 (`ALTER TABLE` idempotent), 또는 dev 한정 "DB 재생성" 정책 명시
 - **2.5** dry-run / 테스트 호환 유지
+- **2.6** `Notifier.on_pipeline_failed(event, error)` 추가 — LLM/외부 API 실패 시 Slack 에 "분석 실패" 알림 (메인 메시지 update)
+- **2.7** Slack 메시지 size 한계 (40k) — `_truncate` 를 모든 long-text 필드(stack trace, patch, RCA) 에 적용
 
 ### Phase 3 — Slack Interactivity (2~3시간)
 
@@ -173,20 +183,25 @@ flowchart TD
 - **3.5** 사유를 store 저장 + 재분석 시 컨텍스트 주입
 - **3.6** 테스트
 
-### Phase 4 — 실 코드 변경 PR (4~5시간, 위험)
+### Phase 4 — 실 코드 변경 PR (5~7시간, 위험)
 
+- **4.0** **Mock → Real tool**: `orchestrator/tools/{sentry,github}.py` 의 mock 함수를 실제 API 호출로 교체. Fixer 가 _어느 파일_ 을 수정할지 알려면 GitHub source lookup 이 실제로 작동해야 함 (전제 조건)
 - **4.1** Fixer 프롬프트: `{files: [{path, content}]}` JSON 강제
 - **4.2** 출력 파싱 + 검증 (실패 시 fallback: 분석 리포트만)
 - **4.3** 다중 파일 PUT contents, 기존 파일 sha 처리
 - **4.4** 거절 시 PR close + branch 삭제
 - **4.5** Hybrid: 코드 변경 + 분석 리포트 둘 다 첨부
+- **4.6** Patch 내용 redaction — LLM 출력에 환경변수/secret 형태 토큰(`sk-`, `AKIA`, `ghp_` 등) 있으면 PR 본문에 `[REDACTED]` 치환
 
-### Phase 5 — 문서/시연 (30분~1시간)
+### Phase 5 — 문서/시연 + 정리 (1~2시간)
 
 - **5.1** architecture.md 에 incident 라이프사이클 상태 머신
 - **5.2** 발표자료에 vision vs 현재 구현 매트릭스
 - **5.3** demo 시나리오 1개 — webhook → Slack thread → 클릭 → PR
 - **5.4** 본 문서의 사용자 시나리오 다이어그램을 발표 슬라이드로 정리
+- **5.5** Startup 시 stale state 복구 — `ANALYZING` 상태로 stuck 된 incident 를 `FAILED` 로 마킹
+- **5.6** `datetime.utcnow()` → `datetime.now(UTC)` cleanup (deprecation warning 30개 제거)
+- **5.7** 통합 테스트 1개 — webhook → /approve → PR dry-run 까지 end-to-end
 
 ---
 
@@ -221,12 +236,27 @@ flowchart LR
 2. 병렬로 **Phase 0** 인프라 셋업 (사용자가 짬짬이)
 3. Phase 0 완료 후 **Phase 2 + 3** 묶어서 진행 (Bot Token 한 번 셋업)
 4. 마지막에 **Phase 4** (가장 위험·고가치)
-5. **Phase 5** 문서/시연
+5. **Phase 5** 문서/시연 + 정리
 
 ---
 
-## 8. 갱신 로그
+## 8. Agent 활용 지점
+
+대부분은 직접 진행 (코드베이스 작음·작업 직렬·사용자 검토 루프 우선). 다음 3 지점에서만 subagent 활용:
+
+| 지점 | 이유 | 어떤 에이전트 |
+|---|---|---|
+| Phase 4.1~4.2 LLM 프롬프트 튜닝 | 출력 포맷 강제·검증이 open-ended, 수십 회 iterate 필요. main context 보호 | `general-purpose` (worktree 격리) |
+| Phase 3 완료 후 보안 리뷰 | 서명 검증·replay 방지·권한 누락 cold review 의 강점 | `general-purpose` 1회 |
+| Phase 5.4 발표자료 다듬기 | 본 작업과 독립, 병렬 가능 | `general-purpose` |
+
+그 외 단계는 직접 진행. cold-start 비용·일관성 위험이 ROI 를 초과함.
+
+---
+
+## 9. 갱신 로그
 
 | 날짜 | 내용 |
 |---|---|
 | 2026-05-13 | 초기 작성. Phase 0~5 정의, 사용자 시나리오 + gap analysis 포함 |
+| 2026-05-13 | 최종 검토 반영: Phase 1.5(서명검증), 2.6/2.7(에러알림·truncate), 4.0(mock→real), 4.6(redaction), 5.5~5.7(정리) 추가. Agent 활용 지점 명시 |
