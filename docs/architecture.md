@@ -1,5 +1,7 @@
 # Architecture
 
+> 본 문서는 **현재 구현된 구조** 를 설명한다. 장기 비전·사용자 시나리오·단계별 구현 계획은 [`plan.md`](./plan.md) 참고.
+
 ## 개요
 
 Sentry/Datadog 의 webhook 을 시작점으로, 3개의 AI 에이전트가 순차 협업하여 근본 원인 분석 → 패치 제안까지 자동화. 개발자 승인 후 GitHub App 이 PR 을 자동 생성한다.

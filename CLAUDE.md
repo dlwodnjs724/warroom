@@ -2,7 +2,7 @@
 
 AI Agent 기반 서비스 장애 탐지·대응 자동화 시스템. uv workspace (Python 3.13), FastAPI + CrewAI + Anthropic Claude.
 
-상세 설계: `docs/decisions.md` / 아키텍처: `docs/architecture.md`
+상세 설계: `docs/decisions.md` / 아키텍처: `docs/architecture.md` / 구현 플랜: `docs/plan.md`
 
 ## 실행
 
@@ -31,4 +31,4 @@ uv run demo.py         # CLI
 | 🔧 | chore | 설정/패키지 |
 | 🏗️ | build | 구조 변경 |
 
-scope: `common` `gateway` `orchestrator` `chatops`
+scope: `common` `gateway` `orchestrator` `chatops` `github`
