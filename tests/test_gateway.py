@@ -66,6 +66,65 @@ class TestSentryWebhookDedupe:
             assert resp.json()["dupe_count"] == expected
 
 
+class TestApprovalPrSkip:
+    """승인 시 category 가 code 가 아니면 PR 생성을 건너뛴다."""
+
+    def _seed_incident(self, c, main_mod, store_mod, category):
+        from common.models import IncidentEvent, IncidentStatus, ResolutionReport, Severity, IncidentCategory
+
+        event = IncidentEvent(
+            incident_id=f"INC-{category}-1",
+            source="sentry",
+            title="test",
+            raw_payload={},
+        )
+        main_mod.incident_store.add(event)
+        report = ResolutionReport(
+            incident_id=event.incident_id,
+            severity=Severity.HIGH,
+            category=IncidentCategory(category),
+            triage_summary="t",
+            root_cause="r",
+            patch_suggestion="p" if category == "code" else "",
+            post_mortem_draft="pm",
+        )
+        main_mod.incident_store.save_report(event.incident_id, report)
+        main_mod.incident_store.update_status(
+            event.incident_id, IncidentStatus.AWAITING_APPROVAL
+        )
+        return event.incident_id
+
+    def test_code_category_attempts_pr(self, client, monkeypatch):
+        c, main_mod, store_mod = client
+        monkeypatch.setenv("GITHUB_REPO", "owner/demo")
+        incident_id = self._seed_incident(c, main_mod, store_mod, "code")
+
+        resp = c.post(f"/incidents/{incident_id}/approve")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "pull_request" in body
+        assert body["pull_request"]["dry_run"] is True  # credentials 없으면 dry-run
+
+    def test_infra_category_skips_pr(self, client, monkeypatch):
+        c, main_mod, store_mod = client
+        monkeypatch.setenv("GITHUB_REPO", "owner/demo")
+        incident_id = self._seed_incident(c, main_mod, store_mod, "infra")
+
+        resp = c.post(f"/incidents/{incident_id}/approve")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["pull_request"]["skipped"] is True
+        assert "infra" in body["pull_request"]["reason"]
+
+    def test_external_category_skips_pr(self, client, monkeypatch):
+        c, main_mod, store_mod = client
+        monkeypatch.setenv("GITHUB_REPO", "owner/demo")
+        incident_id = self._seed_incident(c, main_mod, store_mod, "external")
+
+        resp = c.post(f"/incidents/{incident_id}/approve")
+        assert resp.json()["pull_request"]["skipped"] is True
+
+
 class TestDatadogWebhookDedupe:
     DD_PAYLOAD = {"id": "dd-mon-1", "title": "CPU high", "alert_type": "error"}
 

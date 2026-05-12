@@ -14,7 +14,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Protocol, runtime_checkable
 
-from common.models import IncidentEvent, IncidentStatus, ResolutionReport
+from common.models import IncidentCategory, IncidentEvent, IncidentStatus, ResolutionReport
 
 
 @runtime_checkable
@@ -56,6 +56,7 @@ class InMemoryIncidentStore:
         if incident_id in self._store:
             self._store[incident_id]["report"] = {
                 "severity": report.severity.value,
+                "category": report.category.value,
                 "triage_summary": report.triage_summary,
                 "root_cause": report.root_cause,
                 "patch_suggestion": report.patch_suggestion,
@@ -89,6 +90,7 @@ class SqliteIncidentStore:
     CREATE TABLE IF NOT EXISTS reports (
         incident_id       TEXT PRIMARY KEY REFERENCES incidents(incident_id),
         severity          TEXT NOT NULL,
+        category          TEXT NOT NULL DEFAULT 'code',
         triage_summary    TEXT,
         root_cause        TEXT,
         patch_suggestion  TEXT,
@@ -111,10 +113,15 @@ class SqliteIncidentStore:
 
     def _migrate(self) -> None:
         # ALTER TABLE ADD COLUMN 은 멱등이 아니므로 PRAGMA 로 존재 여부 확인
-        existing = {row["name"] for row in self._conn.execute("PRAGMA table_info(incidents)")}
-        if "dupe_count" not in existing:
+        incident_cols = {row["name"] for row in self._conn.execute("PRAGMA table_info(incidents)")}
+        if "dupe_count" not in incident_cols:
             self._conn.execute(
                 "ALTER TABLE incidents ADD COLUMN dupe_count INTEGER NOT NULL DEFAULT 1"
+            )
+        report_cols = {row["name"] for row in self._conn.execute("PRAGMA table_info(reports)")}
+        if "category" not in report_cols:
+            self._conn.execute(
+                "ALTER TABLE reports ADD COLUMN category TEXT NOT NULL DEFAULT 'code'"
             )
 
     def add(self, event: IncidentEvent) -> None:
@@ -148,12 +155,13 @@ class SqliteIncidentStore:
         with self._lock:
             self._conn.execute(
                 """INSERT OR REPLACE INTO reports
-                   (incident_id, severity, triage_summary, root_cause,
+                   (incident_id, severity, category, triage_summary, root_cause,
                     patch_suggestion, post_mortem_draft, is_approved, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     incident_id,
                     report.severity.value,
+                    report.category.value,
                     report.triage_summary,
                     report.root_cause,
                     report.patch_suggestion,
@@ -180,7 +188,7 @@ class SqliteIncidentStore:
             "report": None,
         }
         rep = self._conn.execute(
-            """SELECT severity, triage_summary, root_cause, patch_suggestion,
+            """SELECT severity, category, triage_summary, root_cause, patch_suggestion,
                       post_mortem_draft, is_approved, created_at
                FROM reports WHERE incident_id = ?""",
             (incident_id,),
@@ -188,6 +196,7 @@ class SqliteIncidentStore:
         if rep:
             result["report"] = {
                 "severity": rep["severity"],
+                "category": rep["category"],
                 "triage_summary": rep["triage_summary"],
                 "root_cause": rep["root_cause"],
                 "patch_suggestion": rep["patch_suggestion"],

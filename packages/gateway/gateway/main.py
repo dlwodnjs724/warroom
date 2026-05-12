@@ -20,7 +20,7 @@ load_dotenv()
 
 from datetime import datetime
 
-from common.models import IncidentEvent, IncidentStatus, ResolutionReport, Severity
+from common.models import IncidentCategory, IncidentEvent, IncidentStatus, ResolutionReport, Severity
 from gateway.parsers import datadog as datadog_parser
 from gateway.parsers import sentry as sentry_parser
 from gateway.store import incident_store
@@ -146,11 +146,17 @@ def _open_pr(entry: dict) -> dict | None:
         print("[WARROOM] 리포트가 없어 PR 생성 건너뜀")
         return None
 
+    category = report_dict.get("category", "code")
+    if category != "code":
+        print(f"[WARROOM] 카테고리 '{category}' — 코드 외 장애로 PR 생성 건너뜀")
+        return {"skipped": True, "reason": f"category={category}"}
+
     from github.factory import make_github_client
 
     report = ResolutionReport(
         incident_id=entry["incident_id"],
         severity=Severity(report_dict["severity"]),
+        category=IncidentCategory(report_dict.get("category", "code")),
         triage_summary=report_dict["triage_summary"] or "",
         root_cause=report_dict["root_cause"] or "",
         patch_suggestion=report_dict["patch_suggestion"] or "",

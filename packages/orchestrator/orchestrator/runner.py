@@ -1,7 +1,7 @@
 import os
 import time
 
-from common.models import IncidentEvent, ResolutionReport, Severity
+from common.models import IncidentCategory, IncidentEvent, ResolutionReport, Severity
 from chatops.base import Notifier
 
 # LLM 사용 여부: MOCK_PIPELINE=true 이면 mock 응답 사용
@@ -23,6 +23,7 @@ def _run_mock_pipeline(event: IncidentEvent, notifier: Notifier) -> ResolutionRe
     time.sleep(1)
     triage_output = f"""\
 - 심각도: HIGH
+- 카테고리: code
 - 영향 서비스: payment-service
 - 영향 사용자: 약 312명
 - 최초 발생: 2026-04-09 03:10 UTC
@@ -114,6 +115,7 @@ def charge(self, payment_method, amount):
     report = ResolutionReport(
         incident_id=event.incident_id,
         severity=Severity.HIGH,
+        category=IncidentCategory.CODE,
         triage_summary=triage_output,
         root_cause=analyst_output,
         patch_suggestion=patch_suggestion,
@@ -124,42 +126,65 @@ def charge(self, payment_method, amount):
 
 
 def _run_crew_pipeline(event: IncidentEvent, notifier: Notifier) -> ResolutionReport:
-    """실제 LLM을 사용하는 CrewAI 파이프라인."""
+    """실제 LLM을 사용하는 CrewAI 파이프라인.
+
+    Triage 단계 결과의 category 가 'code' 인 경우에만 Analyst/Fixer 까지
+    진행한다. 그 외 카테고리는 코드 패치가 무의미하므로 분석 리포트만 남긴다.
+    """
     from crewai import Crew, Task, Process
     from .agents import make_triage_agent, make_analyst_agent, make_fixer_agent
 
     triage_agent = make_triage_agent()
-    analyst_agent = make_analyst_agent()
-    fixer_agent = make_fixer_agent()
-
     payload_summary = (
         f"인시던트 ID: {event.incident_id}\n"
         f"소스: {event.source}\n"
         f"제목: {event.title}\n"
         f"원본 페이로드: {event.raw_payload}"
     )
-
     triage_task = Task(
         description=(
             f"다음 인시던트를 분석하고 초기 브리핑을 작성하세요.\n\n{payload_summary}\n\n"
             "출력 형식:\n"
             "- 심각도: [critical/high/medium/low]\n"
+            "- 카테고리: [code/infra/external/operational]\n"
             "- 요약: (2-3문장으로 상황 설명)\n"
             "- Sentry 이슈 ID: (페이로드에서 추출, 없으면 'unknown')"
         ),
-        expected_output="심각도, 상황 요약, Sentry 이슈 ID를 포함한 초기 브리핑",
+        expected_output="심각도, 카테고리, 상황 요약, Sentry 이슈 ID를 포함한 초기 브리핑",
         agent=triage_agent,
     )
+    Crew(
+        agents=[triage_agent],
+        tasks=[triage_task],
+        process=Process.sequential,
+        verbose=True,
+    ).kickoff()
+
+    triage_output = triage_task.output.raw if triage_task.output else ""
+    severity = _extract_severity(triage_output)
+    category = _extract_category(triage_output)
+
+    if category != IncidentCategory.CODE:
+        notifier.on_agent_update(
+            "WARROOM",
+            f"카테고리 '{category.value}' — Analyst/Fixer 단계 생략, 운영 대응 권장",
+        )
+        report = _build_triage_only_report(event, triage_output, severity, category)
+        notifier.on_resolution_ready(report)
+        return report
+
+    analyst_agent = make_analyst_agent()
+    fixer_agent = make_fixer_agent()
     analyst_task = Task(
         description=(
-            "Triage Agent의 브리핑을 바탕으로 근본 원인을 분석하세요.\n"
+            f"이전 Triage 결과:\n{triage_output}\n\n"
+            "위 브리핑을 바탕으로 근본 원인을 분석하세요.\n"
             "1. Sentry Issue Lookup 툴로 스택트레이스를 확인하세요.\n"
             "2. GitHub Source Lookup 툴로 관련 파일의 최근 변경사항을 확인하세요.\n"
             "3. 수집한 증거를 바탕으로 근본 원인을 명확히 서술하세요."
         ),
         expected_output="증거 기반의 근본 원인 분석",
         agent=analyst_agent,
-        context=[triage_task],
     )
     fixer_task = Task(
         description=(
@@ -170,25 +195,23 @@ def _run_crew_pipeline(event: IncidentEvent, notifier: Notifier) -> ResolutionRe
         ),
         expected_output="패치 코드 스니펫과 포스트모템 초안",
         agent=fixer_agent,
-        context=[triage_task, analyst_task],
+        context=[analyst_task],
     )
-
-    crew = Crew(
-        agents=[triage_agent, analyst_agent, fixer_agent],
-        tasks=[triage_task, analyst_task, fixer_task],
+    Crew(
+        agents=[analyst_agent, fixer_agent],
+        tasks=[analyst_task, fixer_task],
         process=Process.sequential,
         verbose=True,
-    )
-    crew.kickoff()
+    ).kickoff()
 
-    triage_output = triage_task.output.raw if triage_task.output else ""
     analyst_output = analyst_task.output.raw if analyst_task.output else ""
     fixer_output = fixer_task.output.raw if fixer_task.output else ""
-
     patch, postmortem = _split_fixer_output(fixer_output)
+
     report = ResolutionReport(
         incident_id=event.incident_id,
-        severity=_extract_severity(triage_output),
+        severity=severity,
+        category=category,
         triage_summary=triage_output,
         root_cause=analyst_output,
         patch_suggestion=patch,
@@ -198,12 +221,50 @@ def _run_crew_pipeline(event: IncidentEvent, notifier: Notifier) -> ResolutionRe
     return report
 
 
+def _build_triage_only_report(
+    event: IncidentEvent,
+    triage_output: str,
+    severity: Severity,
+    category: IncidentCategory,
+) -> ResolutionReport:
+    """category != code 케이스 — Analyst/Fixer 없이 Triage 만으로 리포트 구성."""
+    return ResolutionReport(
+        incident_id=event.incident_id,
+        severity=severity,
+        category=category,
+        triage_summary=triage_output,
+        root_cause="(코드 외 카테고리 — 추가 분석 단계 생략)",
+        patch_suggestion="",
+        post_mortem_draft=(
+            f"카테고리: {category.value}. 코드 패치 대신 운영 대응이 필요합니다."
+        ),
+    )
+
+
 def _extract_severity(triage_output: str) -> Severity:
     lower = triage_output.lower()
     for level in ("critical", "high", "medium", "low"):
         if level in lower:
             return Severity(level)
     return Severity.MEDIUM
+
+
+def _extract_category(triage_output: str) -> IncidentCategory:
+    """Triage 출력에서 카테고리 추출. '카테고리:' 라인 우선, 없으면 키워드 매칭."""
+    import re
+
+    m = re.search(r"카테고리\s*[:：]\s*(\w+)", triage_output, re.IGNORECASE)
+    if m:
+        try:
+            return IncidentCategory(m.group(1).lower())
+        except ValueError:
+            pass
+    # fallback: 본문에 명시적으로 카테고리가 단독으로 등장하면 채택
+    lower = triage_output.lower()
+    for cat in IncidentCategory:
+        if f" {cat.value}" in f" {lower}" or f"\n{cat.value}" in f"\n{lower}":
+            return cat
+    return IncidentCategory.CODE  # 안전한 기본값: 패치 시도
 
 
 def _split_fixer_output(fixer_output: str) -> tuple[str, str]:
