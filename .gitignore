@@ -1,6 +1,9 @@
 # 환경변수
 .env
 
+# GitHub App private key 등 비밀 파일
+.secrets/
+
 # Python 가상환경
 .venv/
 
@@ -14,6 +17,7 @@ wheels/
 
 # 파이프라인 실행 결과
 output/
+data/
 
 # 수업 자료 및 제출물
 lecture_notes/

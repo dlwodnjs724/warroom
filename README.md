@@ -56,7 +56,7 @@ LLM provider는 환경변수로 전환 (`LLM_PROVIDER=gemini|anthropic|ollama`).
 ```bash
 # 1. 의존성 설치
 uv sync --all-packages
-uv pip install -e packages/common -e packages/gateway -e packages/orchestrator -e packages/chatops
+uv pip install -e packages/common -e packages/gateway -e packages/orchestrator -e packages/chatops -e packages/github
 
 # 2. 환경변수 설정
 cp .env.example .env
@@ -95,7 +95,8 @@ packages/
 ├── common/       # 공유 데이터 모델 (IncidentEvent, ResolutionReport)
 ├── gateway/      # FastAPI webhook 수신 + HITL 엔드포인트
 ├── orchestrator/ # CrewAI 에이전트 파이프라인
-└── chatops/      # Notifier 인터페이스 (Console / Slack)
+├── chatops/      # Notifier 인터페이스 (Console / Slack)
+└── github/       # GitHub App 기반 PR 자동 생성
 ```
 
 ## 확장 포인트
@@ -105,5 +106,24 @@ packages/
 | Datadog 웹훅 | `gateway/parsers/datadog.py` 추가 |
 | Slack 알림 | `chatops/slack.py` 추가 (`Notifier` 구현) |
 | 실제 Sentry API | `orchestrator/tools/sentry.py` TODO 교체 |
-| 실제 GitHub API | `orchestrator/tools/github.py` TODO 교체 |
+| GitHub PR 자동 생성 | `packages/github/` (App 미설정 시 dry-run) |
 | RDB 저장 | `gateway/store.py` `IncidentStore` 교체 |
+
+## GitHub App 설정 (PR 자동 생성)
+
+승인된 인시던트는 `incidents/<id>.md` 파일을 만든 새 브랜치를 push 하고
+PR 을 open 한다. App credentials 가 없으면 dry-run 으로 `output/github_payloads.jsonl`
+에 페이로드만 기록한다.
+
+1. https://github.com/settings/apps/new 에서 GitHub App 생성
+2. **Permissions** — Contents: Read & write, Pull requests: Write, Metadata: Read
+3. App 을 **데모용 레포(예: `<you>/warroom-demo`)** 에 install
+4. App 페이지에서 private key (`.pem`) 다운로드 → `.secrets/warroom-app.private-key.pem`
+5. `.env` 에 추가:
+   ```
+   GITHUB_REPO=<owner>/warroom-demo
+   GITHUB_APP_ID=<App ID>
+   GITHUB_APP_PRIVATE_KEY_PATH=./.secrets/warroom-app.private-key.pem
+   GITHUB_INSTALLATION_ID=<Installation ID>
+   ```
+   Installation ID 는 `https://github.com/settings/installations` 에서 확인.
