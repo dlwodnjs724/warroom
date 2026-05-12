@@ -24,4 +24,5 @@ warroom-chatops = { workspace = true }
 dev = [
     "markdown>=3.10.2",
     "pytest>=9.0.3",
+    "python-docx>=1.2.0",
 ]
