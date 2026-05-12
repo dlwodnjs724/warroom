@@ -1,0 +1,14 @@
+[project]
+name = "warroom-github"
+version = "0.1.0"
+description = "GitHub Integration - PR creation for approved patches"
+requires-python = ">=3.13"
+dependencies = [
+    "warroom-common",
+    "httpx",
+    "PyJWT>=2.10.0",
+    "cryptography>=44.0.0",
+]
+
+[tool.uv.sources]
+warroom-common = { workspace = true }

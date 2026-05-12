@@ -12,6 +12,7 @@ members = [
     "warroom-chatops",
     "warroom-common",
     "warroom-gateway",
+    "warroom-github",
     "warroom-orchestrator",
 ]
 
@@ -2880,6 +2881,7 @@ dependencies = [
     { name = "warroom-chatops" },
     { name = "warroom-common" },
     { name = "warroom-gateway" },
+    { name = "warroom-github" },
     { name = "warroom-orchestrator" },
 ]
 
@@ -2896,6 +2898,7 @@ requires-dist = [
     { name = "warroom-chatops", virtual = "packages/chatops" },
     { name = "warroom-common", virtual = "packages/common" },
     { name = "warroom-gateway", virtual = "packages/gateway" },
+    { name = "warroom-github", virtual = "packages/github" },
     { name = "warroom-orchestrator", virtual = "packages/orchestrator" },
 ]
 
@@ -2942,6 +2945,25 @@ requires-dist = [
     { name = "fastapi" },
     { name = "python-dotenv" },
     { name = "uvicorn" },
+    { name = "warroom-common", virtual = "packages/common" },
+]
+
+[[package]]
+name = "warroom-github"
+version = "0.1.0"
+source = { virtual = "packages/github" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "httpx" },
+    { name = "pyjwt" },
+    { name = "warroom-common" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cryptography", specifier = ">=44.0.0" },
+    { name = "httpx" },
+    { name = "pyjwt", specifier = ">=2.10.0" },
     { name = "warroom-common", virtual = "packages/common" },
 ]
 

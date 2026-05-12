@@ -8,6 +8,7 @@ dependencies = [
     "warroom-gateway",
     "warroom-orchestrator",
     "warroom-chatops",
+    "warroom-github",
     "python-dotenv",
 ]
 
@@ -19,6 +20,7 @@ warroom-common = { workspace = true }
 warroom-gateway = { workspace = true }
 warroom-orchestrator = { workspace = true }
 warroom-chatops = { workspace = true }
+warroom-github = { workspace = true }
 
 [dependency-groups]
 dev = [
