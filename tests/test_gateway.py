@@ -125,6 +125,68 @@ class TestApprovalPrSkip:
         assert resp.json()["pull_request"]["skipped"] is True
 
 
+class TestWebhookSignatureVerification:
+    """secret 설정 시 잘못된 서명을 거절하는지 검증."""
+
+    def test_sentry_rejects_invalid_signature(self, client, monkeypatch):
+        c, _, _ = client
+        monkeypatch.setenv("SENTRY_CLIENT_SECRET", "topsecret")
+        resp = c.post(
+            "/webhook/sentry",
+            json=SENTRY_PAYLOAD,
+            headers={"X-Sentry-Signature": "wrong-sig"},
+        )
+        assert resp.status_code == 401
+
+    def test_sentry_rejects_missing_signature(self, client, monkeypatch):
+        c, _, _ = client
+        monkeypatch.setenv("SENTRY_CLIENT_SECRET", "topsecret")
+        resp = c.post("/webhook/sentry", json=SENTRY_PAYLOAD)
+        assert resp.status_code == 401
+
+    def test_sentry_accepts_valid_signature(self, client, monkeypatch):
+        import hashlib
+        import hmac
+        import json
+
+        c, main_mod, _ = client
+        monkeypatch.setenv("SENTRY_CLIENT_SECRET", "topsecret")
+        body = json.dumps(SENTRY_PAYLOAD).encode("utf-8")
+        sig = hmac.new(b"topsecret", body, hashlib.sha256).hexdigest()
+
+        with patch.object(main_mod, "_run_pipeline"):
+            resp = c.post(
+                "/webhook/sentry",
+                content=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Sentry-Signature": sig,
+                },
+            )
+        assert resp.status_code == 202
+
+    def test_datadog_rejects_wrong_token(self, client, monkeypatch):
+        c, _, _ = client
+        monkeypatch.setenv("WARROOM_DATADOG_TOKEN", "shared-xyz")
+        resp = c.post(
+            "/webhook/datadog",
+            json={"id": "x", "title": "t"},
+            headers={"X-Warroom-Token": "nope"},
+        )
+        assert resp.status_code == 401
+
+    def test_datadog_accepts_valid_token(self, client, monkeypatch):
+        c, main_mod, _ = client
+        monkeypatch.setenv("WARROOM_DATADOG_TOKEN", "shared-xyz")
+        with patch.object(main_mod, "_run_pipeline"):
+            resp = c.post(
+                "/webhook/datadog",
+                json={"id": "dd-sig-1", "title": "t"},
+                headers={"X-Warroom-Token": "shared-xyz"},
+            )
+        assert resp.status_code == 202
+
+
 class TestDatadogWebhookDedupe:
     DD_PAYLOAD = {"id": "dd-mon-1", "title": "CPU high", "alert_type": "error"}
 
