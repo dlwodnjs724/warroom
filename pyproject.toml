@@ -28,3 +28,13 @@ dev = [
     "pytest>=9.0.3",
     "python-docx>=1.2.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = [
+    "tests",
+    "packages/common/tests",
+    "packages/gateway/tests",
+    "packages/orchestrator/tests",
+    "packages/chatops/tests",
+    "packages/github/tests",
+]
