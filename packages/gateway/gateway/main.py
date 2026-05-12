@@ -54,16 +54,26 @@ app = FastAPI(title="Warroom Event Gateway", lifespan=lifespan)
 @app.post("/webhook/sentry", status_code=202)
 async def webhook_sentry(payload: dict[str, Any], background_tasks: BackgroundTasks):
     """Sentry 웹훅 수신 — 즉시 202 반환 후 백그라운드에서 파이프라인 실행."""
-    event = sentry_parser.parse(payload)
-    incident_store.add(event)
-    background_tasks.add_task(_run_pipeline, event)
-    return {"incident_id": event.incident_id, "status": "accepted"}
+    return _ingest(sentry_parser.parse(payload), background_tasks)
 
 
 @app.post("/webhook/datadog", status_code=202)
 async def webhook_datadog(payload: dict[str, Any], background_tasks: BackgroundTasks):
     """Datadog 웹훅 수신 — Monitor/Incident 페이로드 모두 처리."""
-    event = datadog_parser.parse(payload)
+    return _ingest(datadog_parser.parse(payload), background_tasks)
+
+
+def _ingest(event: IncidentEvent, background_tasks: BackgroundTasks) -> dict:
+    """파싱된 IncidentEvent 를 dedupe 처리 후 파이프라인에 흘려보낸다."""
+    existing = incident_store.get(event.incident_id)
+    if existing:
+        count = incident_store.increment_dupe_count(event.incident_id)
+        print(f"[WARROOM] 중복 수신 — {event.incident_id} (총 {count}건). 기존 파이프라인 유지.")
+        return {
+            "incident_id": event.incident_id,
+            "status": "duplicate",
+            "dupe_count": count,
+        }
     incident_store.add(event)
     background_tasks.add_task(_run_pipeline, event)
     return {"incident_id": event.incident_id, "status": "accepted"}

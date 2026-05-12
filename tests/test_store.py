@@ -126,6 +126,30 @@ class TestReportPersistence:
         assert entry["report"]["root_cause"] == "updated cause"
 
 
+class TestDedupe:
+    def test_new_incident_has_dupe_count_one(self, store, event):
+        store.add(event)
+        assert store.get("sentry-1")["dupe_count"] == 1
+
+    def test_increment_dupe_count_returns_new_value(self, store, event):
+        store.add(event)
+        assert store.increment_dupe_count("sentry-1") == 2
+        assert store.increment_dupe_count("sentry-1") == 3
+        assert store.get("sentry-1")["dupe_count"] == 3
+
+    def test_increment_on_missing_returns_zero(self, store):
+        assert store.increment_dupe_count("missing") == 0
+
+    def test_add_resets_dupe_count(self, store, event):
+        store.add(event)
+        store.increment_dupe_count("sentry-1")
+        store.increment_dupe_count("sentry-1")
+        assert store.get("sentry-1")["dupe_count"] == 3
+
+        store.add(event)  # 재등록
+        assert store.get("sentry-1")["dupe_count"] == 1
+
+
 class TestSqlitePersistence:
     """SQLite 전용 — 실제 파일에 영속되는지 별도 검증."""
 

@@ -29,6 +29,7 @@ class IncidentStore(Protocol):
     def save_report(self, incident_id: str, report: ResolutionReport) -> None: ...
     def get(self, incident_id: str) -> dict | None: ...
     def list_all(self) -> list[dict]: ...
+    def increment_dupe_count(self, incident_id: str) -> int: ...
 
 
 class InMemoryIncidentStore:
@@ -42,6 +43,7 @@ class InMemoryIncidentStore:
             "title": event.title,
             "status": IncidentStatus.PENDING,
             "report": None,
+            "dupe_count": 1,
         }
 
     def update_status(self, incident_id, status, is_approved=None):
@@ -68,6 +70,12 @@ class InMemoryIncidentStore:
     def list_all(self):
         return list(self._store.values())
 
+    def increment_dupe_count(self, incident_id: str) -> int:
+        if incident_id not in self._store:
+            return 0
+        self._store[incident_id]["dupe_count"] = self._store[incident_id].get("dupe_count", 1) + 1
+        return self._store[incident_id]["dupe_count"]
+
 
 class SqliteIncidentStore:
     _SCHEMA = """
@@ -75,7 +83,8 @@ class SqliteIncidentStore:
         incident_id TEXT PRIMARY KEY,
         source      TEXT NOT NULL,
         title       TEXT NOT NULL,
-        status      TEXT NOT NULL
+        status      TEXT NOT NULL,
+        dupe_count  INTEGER NOT NULL DEFAULT 1
     );
     CREATE TABLE IF NOT EXISTS reports (
         incident_id       TEXT PRIMARY KEY REFERENCES incidents(incident_id),
@@ -97,13 +106,22 @@ class SqliteIncidentStore:
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(self._SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        # ALTER TABLE ADD COLUMN 은 멱등이 아니므로 PRAGMA 로 존재 여부 확인
+        existing = {row["name"] for row in self._conn.execute("PRAGMA table_info(incidents)")}
+        if "dupe_count" not in existing:
+            self._conn.execute(
+                "ALTER TABLE incidents ADD COLUMN dupe_count INTEGER NOT NULL DEFAULT 1"
+            )
 
     def add(self, event: IncidentEvent) -> None:
         with self._lock:
             self._conn.execute(
-                "INSERT OR REPLACE INTO incidents (incident_id, source, title, status) "
-                "VALUES (?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO incidents (incident_id, source, title, status, dupe_count) "
+                "VALUES (?, ?, ?, ?, 1)",
                 (event.incident_id, event.source, event.title, IncidentStatus.PENDING.value),
             )
             self._conn.execute(
@@ -148,7 +166,7 @@ class SqliteIncidentStore:
 
     def get(self, incident_id: str) -> dict | None:
         row = self._conn.execute(
-            "SELECT incident_id, source, title, status FROM incidents WHERE incident_id = ?",
+            "SELECT incident_id, source, title, status, dupe_count FROM incidents WHERE incident_id = ?",
             (incident_id,),
         ).fetchone()
         if not row:
@@ -158,6 +176,7 @@ class SqliteIncidentStore:
             "source": row["source"],
             "title": row["title"],
             "status": IncidentStatus(row["status"]),
+            "dupe_count": row["dupe_count"],
             "report": None,
         }
         rep = self._conn.execute(
@@ -183,6 +202,17 @@ class SqliteIncidentStore:
             "SELECT incident_id FROM incidents ORDER BY incident_id"
         ).fetchall()]
         return [self.get(i) for i in ids if self.get(i) is not None]
+
+    def increment_dupe_count(self, incident_id: str) -> int:
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE incidents SET dupe_count = dupe_count + 1 "
+                "WHERE incident_id = ? RETURNING dupe_count",
+                (incident_id,),
+            )
+            row = cur.fetchone()
+            self._conn.commit()
+            return row["dupe_count"] if row else 0
 
 
 def _build_default_store() -> IncidentStore:
