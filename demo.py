@@ -128,10 +128,24 @@ def main():
 
     if approved:
         print(f"\n[WARROOM] 승인 완료. 리포트 저장: {path}")
-        print("[WARROOM] (TODO: Jira 티켓 생성 확장 포인트)")
+        _open_github_pr(report)
     else:
         print(f"\n[WARROOM] 반려 처리. 리포트 저장: {path}")
         print("[WARROOM] (TODO: 재분석 요청 또는 수동 대응)")
+
+
+def _open_github_pr(report) -> None:
+    """승인된 리포트로 GitHub PR 생성. GITHUB_REPO 미설정 시 skip."""
+    repo = os.getenv("GITHUB_REPO")
+    if not repo:
+        print("[WARROOM] GITHUB_REPO 미설정 — PR 생성 건너뜀")
+        return
+    from github.factory import make_github_client
+
+    client = make_github_client()
+    result = client.create_patch_pr(report, repo=repo)
+    tag = "(dry-run)" if result.dry_run else ""
+    print(f"[WARROOM] PR 생성 {tag}: {result.pr_url}")
 
 
 if __name__ == "__main__":

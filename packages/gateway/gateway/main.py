@@ -18,7 +18,9 @@ from fastapi.responses import JSONResponse
 
 load_dotenv()
 
-from common.models import IncidentEvent, IncidentStatus
+from datetime import datetime
+
+from common.models import IncidentEvent, IncidentStatus, ResolutionReport, Severity
 from gateway.parsers import datadog as datadog_parser
 from gateway.parsers import sentry as sentry_parser
 from gateway.store import incident_store
@@ -108,7 +110,49 @@ def _handle_decision(incident_id: str, approved: bool) -> JSONResponse:
 
     action = "승인" if approved else "반려"
     print(f"[WARROOM] 인시던트 {incident_id} {action} 처리 완료")
-    if approved:
-        print(f"[WARROOM] (TODO: Jira 티켓 생성 확장 포인트)")
 
-    return JSONResponse({"incident_id": incident_id, "status": status, "action": action})
+    response: dict[str, object] = {
+        "incident_id": incident_id,
+        "status": status,
+        "action": action,
+    }
+    if approved:
+        pr_result = _open_pr(entry)
+        if pr_result:
+            response["pull_request"] = pr_result
+
+    return JSONResponse(response)
+
+
+def _open_pr(entry: dict) -> dict | None:
+    """승인된 인시던트로 PR 을 만든다. GITHUB_REPO 미설정 시 skip."""
+    repo = os.getenv("GITHUB_REPO")
+    if not repo:
+        print("[WARROOM] GITHUB_REPO 미설정 — PR 생성 건너뜀")
+        return None
+
+    report_dict = entry.get("report")
+    if not report_dict:
+        print("[WARROOM] 리포트가 없어 PR 생성 건너뜀")
+        return None
+
+    from github.factory import make_github_client
+
+    report = ResolutionReport(
+        incident_id=entry["incident_id"],
+        severity=Severity(report_dict["severity"]),
+        triage_summary=report_dict["triage_summary"] or "",
+        root_cause=report_dict["root_cause"] or "",
+        patch_suggestion=report_dict["patch_suggestion"] or "",
+        post_mortem_draft=report_dict["post_mortem_draft"] or "",
+        is_approved=True,
+        created_at=datetime.fromisoformat(report_dict["created_at"]),
+    )
+    client = make_github_client()
+    result = client.create_patch_pr(report, repo=repo)
+    return {
+        "url": result.pr_url,
+        "branch": result.branch,
+        "number": result.pr_number,
+        "dry_run": result.dry_run,
+    }
