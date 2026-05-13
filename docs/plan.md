@@ -165,16 +165,16 @@ flowchart TD
 - **1.5** ✅ Sentry/Datadog webhook 서명 검증 (signing secret 환경변수)
   - 대안 아키텍처: 내부망 한정이면 mTLS / bearer token 으로 대체 가능. Slack 경유(Sentry→Slack→우리)는 데이터 충실도/latency/의존성 측면에서 권장 안 함
 
-### Phase 1.6 — 구조 정리 (DB 레이어 + 테스트 격리, 4시간)
+### Phase 1.6 — 구조 정리 (완료)
 
-- **1.6.1** 테스트를 패키지별 디렉토리로 이동 (hybrid: 단일패키지 → 패키지 내, 통합 → top-level)
-- **1.6.2** SQLAlchemy 2.0 모델 정의 + 패키지 구조
-- **1.6.3** Alembic 도입 + 초기 revision (현 schema 캡처)
-- **1.6.4** `DATABASE_URL` 환경변수 분기 — dev/prod=MySQL, test=in-memory SQLite
-- **1.6.5** store.py 를 async SQLAlchemy 로 포팅 (`threading.Lock` 제거)
-- **1.6.6** docker-compose.yml (MySQL 8.0) — local dev/시연용
-- **1.6.7** 테스트 갱신 (in-memory SQLite + 트랜잭션 롤백 fixture)
-- **1.6.8** README / .env.example / plan.md 갱신
+- **1.6.1** ✅ 테스트를 패키지별 디렉토리로 이동 (hybrid)
+- **1.6.2** ✅ SQLAlchemy 2.0 모델 (Incident, Report)
+- **1.6.3** ✅ Alembic 도입 + 초기 revision
+- **1.6.4** ✅ `DATABASE_URL` 환경변수 분기
+- **1.6.5** ✅ store.py async SQLAlchemy 포팅 (`threading.Lock` 제거)
+- **1.6.6** ✅ docker-compose.yml (MySQL 8.0)
+- **1.6.7** ✅ 테스트 async + in-memory SQLite fixture
+- **1.6.8** ✅ README / .env.example / docs
 
 환경 매트릭스:
 
@@ -282,3 +282,4 @@ flowchart LR
 | 2026-05-13 | 초기 작성. Phase 0~5 정의, 사용자 시나리오 + gap analysis 포함 |
 | 2026-05-13 | 최종 검토 반영: Phase 1.5(서명검증), 2.6/2.7(에러알림·truncate), 4.0(mock→real), 4.6(redaction), 5.5~5.7(정리) 추가. Agent 활용 지점 명시 |
 | 2026-05-13 | Phase 1 완료 (5 commits, 104 tests). Phase 1.6 추가 — DB 레이어 SQLAlchemy/Alembic, MySQL dev/prod + in-memory SQLite test, 테스트 패키지별 격리 |
+| 2026-05-13 | Phase 1.6 완료 (90 tests). 테스트 패키지별 이동, SQLAlchemy 2.0 + Alembic, async store, docker-compose MySQL 8.0 |

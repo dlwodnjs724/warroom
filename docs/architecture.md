@@ -83,7 +83,11 @@ packages/
 │
 ├── gateway/         # Event Gateway
 │   ├── main.py      # FastAPI 엔드포인트 (webhook, incidents, approve/reject)
-│   ├── store.py     # IncidentStore Protocol + InMemory / Sqlite 백엔드
+│   ├── store.py     # IncidentStore (Async SQLAlchemy 2.0)
+│   ├── security.py  # webhook 서명 검증 (Sentry HMAC, Datadog token)
+│   ├── db/
+│   │   ├── models.py    # SQLAlchemy Base, Incident, Report
+│   │   └── session.py   # AsyncEngine + AsyncSession factory
 │   └── parsers/
 │       ├── sentry.py
 │       └── datadog.py
@@ -125,4 +129,5 @@ packages/
 - Webhook 수신 후 **1초 이내 202 반환** (BackgroundTasks 분리)
 - 외부 API 실패 시 크래시 없이 dry-run 폴백 (Slack, GitHub 모두)
 - API Key/Private Key 는 `.env` / `.secrets/` 만, 코드 하드코딩 금지
+- DB: dev/prod = MySQL (docker-compose), test/ci = in-memory SQLite. `DATABASE_URL` 환경변수 분기. 스키마 변경은 Alembic revision 으로
 - Fixer 출력 코드는 PR 본문에 첨부되며 자동 merge 없음 (HITL 필수)

@@ -65,10 +65,16 @@ cp .env.example .env
 # Anthropic 사용 시: LLM_PROVIDER=anthropic + ANTHROPIC_API_KEY 입력
 # 비용 없이 흐름만 검증할 때: MOCK_PIPELINE=true
 
-# 3-a. 서버 실행
+# 3. (dev/prod) MySQL 컨테이너 + 마이그레이션
+docker compose up -d
+# .env 에 DATABASE_URL=mysql+aiomysql://warroom:warroom@localhost:3306/warroom 설정
+uv run alembic upgrade head
+# (Test/CI 는 in-memory SQLite — 별도 셋업 불필요)
+
+# 4-a. 서버 실행
 uv run serve.py
 
-# 3-b. CLI 실행 (데모)
+# 4-b. CLI 실행 (데모)
 uv run demo.py
 ```
 
@@ -107,7 +113,7 @@ packages/
 | Slack 알림 | `chatops/slack.py` 추가 (`Notifier` 구현) |
 | 실제 Sentry API | `orchestrator/tools/sentry.py` TODO 교체 |
 | GitHub PR 자동 생성 | `packages/github/` (App 미설정 시 dry-run) |
-| RDB 저장 | `gateway/store.py` `IncidentStore` 교체 |
+| 스키마 변경 | `alembic revision --autogenerate -m "..."` → `alembic upgrade head` |
 
 ## GitHub App 설정 (PR 자동 생성)
 
