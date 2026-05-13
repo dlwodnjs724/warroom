@@ -63,10 +63,8 @@ uv run pre-commit install
 
 # 2. 환경변수 설정
 cp .env.example .env
-# 기본은 Gemini Free Tier — .env 에 GEMINI_API_KEY 입력
-#   (https://aistudio.google.com/apikey 에서 발급, 무료)
-# Anthropic 사용 시: LLM_PROVIDER=anthropic + ANTHROPIC_API_KEY 입력
-# 비용 없이 흐름만 검증할 때: MOCK_PIPELINE=true
+# 최소: GEMINI_API_KEY (또는 MOCK_PIPELINE=true 로 LLM 없이 흐름 검증)
+# 외부 서비스 (Slack / Sentry / GitHub App / ngrok) 전체 셋업은 docs/setup.md 참고
 
 # 3. DB 셋업
 #    - SQLite (로컬 빠른 체험)  : 별도 작업 불필요. 서버/데모 첫 실행 시 자동 스키마 생성
@@ -120,21 +118,8 @@ packages/
 | GitHub PR 자동 생성 | `packages/github/` (App 미설정 시 dry-run) |
 | 스키마 변경 | `alembic revision --autogenerate -m "..."` → `alembic upgrade head` |
 
-## GitHub App 설정 (PR 자동 생성)
+## 외부 서비스 셋업
 
-승인된 인시던트는 `incidents/<id>.md` 파일을 만든 새 브랜치를 push 하고
-PR 을 open 한다. App credentials 가 없으면 dry-run 으로 `output/github_payloads.jsonl`
-에 페이로드만 기록한다.
+Slack / Sentry / ngrok / GitHub App / LLM provider 전체 단계별 가이드 — [`docs/setup.md`](./docs/setup.md).
 
-1. https://github.com/settings/apps/new 에서 GitHub App 생성
-2. **Permissions** — Contents: Read & write, Pull requests: Write, Metadata: Read
-3. App 을 **데모용 레포(예: `<you>/warroom-demo`)** 에 install
-4. App 페이지에서 private key (`.pem`) 다운로드 → `.secrets/warroom-app.private-key.pem`
-5. `.env` 에 추가:
-   ```
-   GITHUB_REPO=<owner>/warroom-demo
-   GITHUB_APP_ID=<App ID>
-   GITHUB_APP_PRIVATE_KEY_PATH=./.secrets/warroom-app.private-key.pem
-   GITHUB_INSTALLATION_ID=<Installation ID>
-   ```
-   Installation ID 는 `https://github.com/settings/installations` 에서 확인.
+App credentials 가 없어도 dry-run 으로 동작 (Slack=콘솔, GitHub=`output/github_payloads.jsonl`, LLM=`MOCK_PIPELINE=true`).
