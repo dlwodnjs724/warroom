@@ -137,7 +137,7 @@ class TestWebhookSignatureVerification:
         resp = c.post(
             "/webhook/sentry",
             json=SENTRY_PAYLOAD,
-            headers={"X-Sentry-Signature": "wrong-sig"},
+            headers={"Sentry-Hook-Signature": "wrong-sig"},
         )
         assert resp.status_code == 401
 
@@ -159,7 +159,7 @@ class TestWebhookSignatureVerification:
                 content=body,
                 headers={
                     "Content-Type": "application/json",
-                    "X-Sentry-Signature": sig,
+                    "Sentry-Hook-Signature": sig,
                 },
             )
         assert resp.status_code == 202

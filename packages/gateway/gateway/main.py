@@ -68,11 +68,11 @@ app = FastAPI(title="Warroom Event Gateway", lifespan=lifespan)
 async def webhook_sentry(
     request: Request,
     background_tasks: BackgroundTasks,
-    x_sentry_signature: str | None = Header(default=None),
+    sentry_hook_signature: str | None = Header(default=None),
 ):
     """Sentry 웹훅 수신 — 즉시 202 반환 후 백그라운드에서 파이프라인 실행."""
     body = await request.body()
-    if not verify_sentry_signature(body, x_sentry_signature):
+    if not verify_sentry_signature(body, sentry_hook_signature):
         raise HTTPException(status_code=401, detail="Invalid Sentry signature")
     payload = json.loads(body)
     return await _ingest(sentry_parser.parse(payload), background_tasks)

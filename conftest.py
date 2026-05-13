@@ -10,6 +10,14 @@ import pytest
 @pytest.fixture(autouse=True)
 def _isolate_db(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+
+    # gateway.main 의 top-level `load_dotenv()` 가 .env 의 webhook secret 을
+    # 환경에 주입한다. 이를 무력화하려면 import 이후에 delenv 해야 한다.
+    import gateway.main  # noqa: F401 — side-effect import (load_dotenv 트리거)
+
+    for var in ("SENTRY_CLIENT_SECRET", "WARROOM_DATADOG_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+
     from gateway import store as store_mod
     from gateway.db import session as session_mod
 
