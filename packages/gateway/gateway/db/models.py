@@ -22,6 +22,9 @@ class Incident(Base):
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     status: Mapped[str] = mapped_column(String(50), nullable=False)
     dupe_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # Slack 스레드 영속화 — chat.update / thread reply 시 재사용
+    slack_channel_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    slack_ts: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     report: Mapped["Report | None"] = relationship(
         back_populates="incident",

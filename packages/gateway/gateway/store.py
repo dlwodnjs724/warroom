@@ -68,6 +68,29 @@ class IncidentStore:
                     report.is_approved = is_approved
             await s.commit()
 
+    async def set_slack_thread(self, incident_id: str, channel_id: str, ts: str) -> None:
+        """Slack chat.postMessage 의 응답 (channel, ts) 영속화.
+
+        gateway 재시작 후에도 thread reply / chat.update 가 가능하도록 DB 에 기록한다.
+        SlackNotifier 가 in-memory 캐시로 1차 hit, miss 시 store fallback.
+        """
+        sf = get_session_factory()
+        async with sf() as s:
+            incident = await s.get(Incident, incident_id)
+            if not incident:
+                return
+            incident.slack_channel_id = channel_id
+            incident.slack_ts = ts
+            await s.commit()
+
+    async def get_slack_thread(self, incident_id: str) -> tuple[str, str] | None:
+        sf = get_session_factory()
+        async with sf() as s:
+            incident = await s.get(Incident, incident_id)
+            if not incident or not incident.slack_channel_id or not incident.slack_ts:
+                return None
+            return incident.slack_channel_id, incident.slack_ts
+
     async def save_report(self, incident_id: str, report: ResolutionReport) -> None:
         sf = get_session_factory()
         async with sf() as s:
@@ -124,6 +147,8 @@ def _incident_to_dict(incident: Incident, report: Report | None) -> dict:
         "title": incident.title,
         "status": IncidentStatus(incident.status),
         "dupe_count": incident.dupe_count,
+        "slack_channel_id": incident.slack_channel_id,
+        "slack_ts": incident.slack_ts,
         "report": _report_to_dict(report) if report else None,
     }
 
