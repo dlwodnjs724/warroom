@@ -185,6 +185,20 @@ flowchart TD
 | Demo / 시연 | `mysql+aiomysql://...` | 운영 가정 |
 | Alembic migration smoke | MySQL 컨테이너 | `alembic upgrade head` 안전성 검증 |
 
+### Phase 1.7 — 코드 건강성 (완료)
+
+Phase 2 진입 전 long-term maintainability 정리.
+
+- **1.7.1** ✅ `init_schema` 를 SQLite 한정 — MySQL 운영은 `alembic upgrade head` 강제 (사고 가능성 차단)
+- **1.7.2** ✅ `.claude/rules/` 신설: `db / testing / async / datetime / lint` 5개 컨벤션 파일 + CLAUDE.md `@import`
+- **1.7.3** ✅ `common.clock` 단일 시간 소스 — `APP_TZ=ZoneInfo(env APP_TZ | "UTC")`, `now()` helper. `datetime.now()` 직접 호출 금지
+- **1.7.4** ✅ ruff lint(E,F,I,B,UP,SIM,DTZ) + format 전면 적용 — 35 파일 일괄 정리, 47개 deprecation warning → 0
+- **1.7.5** ✅ `(str, Enum)` → `StrEnum` 마이그레이션 (Severity/IncidentCategory/IncidentStatus)
+- **1.7.6** ✅ pre-commit framework + `ruff-pre-commit` hook — `git commit` 시 자동 강제
+- **1.7.7** ✅ docs/decisions.md stale 갱신 (메모리/JSON → SQLAlchemy, 200→202)
+
+⚠️ **datetime rule 잔여 미결**: `datetime.md §2` MySQL TZ 전략 (TIMESTAMP 컬럼 or connection `SET time_zone`) 미확정. Phase 2 이전에 결정 권장.
+
 ### Phase 2 — Slack 가시성 (3~4시간) ★ Phase 0.1 선행 필요
 
 - **2.1** `SlackNotifier` 를 `chat.postMessage` 기반으로 재작성
@@ -221,8 +235,8 @@ flowchart TD
 - **5.3** demo 시나리오 1개 — webhook → Slack thread → 클릭 → PR
 - **5.4** 본 문서의 사용자 시나리오 다이어그램을 발표 슬라이드로 정리
 - **5.5** Startup 시 stale state 복구 — `ANALYZING` 상태로 stuck 된 incident 를 `FAILED` 로 마킹
-- **5.6** `datetime.utcnow()` → `datetime.now(UTC)` cleanup (deprecation warning 30개 제거)
-- **5.7** 통합 테스트 1개 — webhook → /approve → PR dry-run 까지 end-to-end
+- **5.6** 통합 테스트 1개 — webhook → /approve → PR dry-run 까지 end-to-end
+- **5.7** GitHub Actions CI — pytest + ruff + pre-commit run
 
 ---
 
@@ -283,3 +297,4 @@ flowchart LR
 | 2026-05-13 | 최종 검토 반영: Phase 1.5(서명검증), 2.6/2.7(에러알림·truncate), 4.0(mock→real), 4.6(redaction), 5.5~5.7(정리) 추가. Agent 활용 지점 명시 |
 | 2026-05-13 | Phase 1 완료 (5 commits, 104 tests). Phase 1.6 추가 — DB 레이어 SQLAlchemy/Alembic, MySQL dev/prod + in-memory SQLite test, 테스트 패키지별 격리 |
 | 2026-05-13 | Phase 1.6 완료 (90 tests). 테스트 패키지별 이동, SQLAlchemy 2.0 + Alembic, async store, docker-compose MySQL 8.0 |
+| 2026-05-13 | Phase 1.7 정식화 + 완료 (90 tests / 0 warnings). init_schema SQLite-only, .claude/rules 5개 분리, common.clock + ruff DTZ + StrEnum, ruff lint+format 전면, pre-commit. 5.6 (datetime cleanup) 은 1.7.3 에 흡수돼 제거. 5.7 GitHub Actions CI 신규 |
