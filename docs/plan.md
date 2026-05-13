@@ -184,8 +184,8 @@ flowchart TD
 | 환경 | DB | 이유 |
 |---|---|---|
 | Test (unit) / CI | `sqlite+aiosqlite:///:memory:` | 빠름, 격리, 셋업 zero |
-| Local dev | `mysql+aiomysql://...` (docker-compose) | dev/prod parity, quirk 조기 발견 |
-| Demo / 시연 | `mysql+aiomysql://...` | 운영 가정 |
+| Local dev | `mysql+asyncmy://...` (docker-compose) | dev/prod parity, quirk 조기 발견 |
+| Demo / 시연 | `mysql+asyncmy://...` | 운영 가정 |
 | Alembic migration smoke | MySQL 컨테이너 | `alembic upgrade head` 안전성 검증 |
 
 ### Phase 1.7 — 코드 건강성 (완료)

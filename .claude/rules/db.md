@@ -39,7 +39,7 @@ async with factory() as s:
 | 백엔드 | 자동 셋업 | 비고 |
 |---|---|---|
 | SQLite (`sqlite+aiosqlite://...`) | ✅ `lifespan` / `demo.py` 가 `init_schema()` 호출 | dev/test 편의 |
-| MySQL (`mysql+aiomysql://...`) | ❌ 자동 안 함 | **반드시 `uv run alembic upgrade head` 선행** |
+| MySQL (`mysql+asyncmy://...`) | ❌ 자동 안 함 | **반드시 `uv run alembic upgrade head` 선행** |
 
 분기는 `gateway.db.session.is_sqlite_backend()` 한 곳. 새 DB 코드 추가 시 우회하지 말 것.
 

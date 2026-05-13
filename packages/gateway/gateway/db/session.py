@@ -1,7 +1,7 @@
 """Async SQLAlchemy 엔진 / 세션 관리.
 
 DATABASE_URL 환경변수로 백엔드 선택:
-    dev/prod : mysql+aiomysql://user:pass@host:3306/dbname
+    dev/prod : mysql+asyncmy://user:pass@host:3306/dbname
     test/ci  : sqlite+aiosqlite:///:memory:
     default  : sqlite+aiosqlite:///./data/warroom.db  (로컬 첫 실행 편의)
 """

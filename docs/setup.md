@@ -227,7 +227,7 @@ LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 
 # DB (MySQL 사용 시)
-DATABASE_URL=mysql+aiomysql://warroom:warroom@localhost:3306/warroom?init_command=SET%20time_zone%3D%27%2B00:00%27
+DATABASE_URL=mysql+asyncmy://warroom:warroom@localhost:3306/warroom?init_command=SET%20time_zone%3D%27%2B00:00%27
 ```
 
 ### 동작 확인
