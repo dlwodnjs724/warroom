@@ -9,7 +9,7 @@ _USE_MOCK = os.getenv("MOCK_PIPELINE", "false").lower() == "true"
 
 
 def run_pipeline(event: IncidentEvent, notifier: Notifier) -> ResolutionReport:
-    notifier.on_agent_update("WARROOM", "에이전트 파이프라인 시작...")
+    notifier.on_agent_update(event.incident_id, "WARROOM", "에이전트 파이프라인 시작...")
 
     if _USE_MOCK:
         return _run_mock_pipeline(event, notifier)
@@ -19,7 +19,9 @@ def run_pipeline(event: IncidentEvent, notifier: Notifier) -> ResolutionReport:
 def _run_mock_pipeline(event: IncidentEvent, notifier: Notifier) -> ResolutionReport:
     """LLM 없이 고정 응답으로 전체 플로우를 검증하는 mock 파이프라인."""
 
-    notifier.on_agent_update("Triage Agent", "인시던트 심각도 분류 및 타임라인 재구성 중...")
+    notifier.on_agent_update(
+        event.incident_id, "Triage Agent", "인시던트 심각도 분류 및 타임라인 재구성 중..."
+    )
     time.sleep(1)
     triage_output = f"""\
 - 심각도: HIGH
@@ -32,13 +34,13 @@ def _run_mock_pipeline(event: IncidentEvent, notifier: Notifier) -> ResolutionRe
 - 요약: {event.title} 오류가 결제 서비스에서 배포 직후부터 급증. \
 최근 1시간 내 847회 발생. lazy initialization 변경이 트리거로 추정됨.
 - Sentry 이슈 ID: {event.incident_id}"""
-    notifier.on_agent_update("Triage Agent", "초기 브리핑 완료.")
+    notifier.on_agent_update(event.incident_id, "Triage Agent", "초기 브리핑 완료.")
 
-    notifier.on_agent_update("Analyst Agent", "Sentry 스택트레이스 조회 중...")
+    notifier.on_agent_update(event.incident_id, "Analyst Agent", "Sentry 스택트레이스 조회 중...")
     time.sleep(1)
-    notifier.on_agent_update("Analyst Agent", "GitHub 커밋 이력 조회 중...")
+    notifier.on_agent_update(event.incident_id, "Analyst Agent", "GitHub 커밋 이력 조회 중...")
     time.sleep(1)
-    notifier.on_agent_update("Analyst Agent", "5 Whys / Fishbone 분석 중...")
+    notifier.on_agent_update(event.incident_id, "Analyst Agent", "5 Whys / Fishbone 분석 중...")
     time.sleep(1)
     analyst_output = """\
 ## 근본 원인 분석
@@ -70,9 +72,9 @@ lazy init 패턴 도입 시 영향받는 모든 호출부를 검토하는 프로
 ### 기여 요인
 - payment_method=None 케이스 단위 테스트 부재 [Confirmed]
 - 배포 후 결제 에러율 알람 임계값이 높아 MTTD 지연 [Estimated]"""
-    notifier.on_agent_update("Analyst Agent", "근본 원인 분석 완료.")
+    notifier.on_agent_update(event.incident_id, "Analyst Agent", "근본 원인 분석 완료.")
 
-    notifier.on_agent_update("Fixer Agent", "패치 코드 및 재발 방지 계획 수립 중...")
+    notifier.on_agent_update(event.incident_id, "Fixer Agent", "패치 코드 및 재발 방지 계획 수립 중...")
     time.sleep(1)
     patch_suggestion = """\
 ```python
@@ -110,7 +112,7 @@ def charge(self, payment_method, amount):
 | REM-006 | 결제 게이트웨이 자동 롤백 구현 | Recovery | MTTR < 5분 |
 | REM-007 | lazy init 패턴 린터 룰 추가 | Prevention | 린터 경고 0건 |"""
 
-    notifier.on_agent_update("Fixer Agent", "패치 코드 및 포스트모템 초안 완료.")
+    notifier.on_agent_update(event.incident_id, "Fixer Agent", "패치 코드 및 포스트모템 초안 완료.")
 
     report = ResolutionReport(
         incident_id=event.incident_id,
@@ -167,6 +169,7 @@ def _run_crew_pipeline(event: IncidentEvent, notifier: Notifier) -> ResolutionRe
 
     if category != IncidentCategory.CODE:
         notifier.on_agent_update(
+            event.incident_id,
             "WARROOM",
             f"카테고리 '{category.value}' — Analyst/Fixer 단계 생략, 운영 대응 권장",
         )

@@ -1,4 +1,7 @@
-"""SlackNotifier 단위 테스트."""
+"""SlackNotifier 단위 테스트 — Bot Token 기반 chat.postMessage / thread / chat.update.
+
+dry-run / 실 Slack 모드 / thread 캐시 / 영속화 콜백 / 실패 폴백을 모두 검증.
+"""
 
 import json
 from datetime import datetime
@@ -32,86 +35,214 @@ def report():
     )
 
 
+class _FakeSlack:
+    """chat.postMessage / chat.update 응답을 시뮬레이션."""
+
+    def __init__(self, channel_id: str = "C123", responses: list[dict] | None = None):
+        self.calls: list[tuple[str, dict, dict]] = []  # (url, headers, payload)
+        self._channel_id = channel_id
+        self._ts_counter = 0
+        self._responses = responses or []
+
+    def post(self, url, headers, json, timeout):
+        self.calls.append((url, headers, json))
+        if self._responses:
+            resp_data = self._responses.pop(0)
+        elif "chat.postMessage" in url:
+            self._ts_counter += 1
+            resp_data = {"ok": True, "channel": self._channel_id, "ts": f"1700000000.{self._ts_counter:06d}"}
+        else:  # chat.update
+            resp_data = {"ok": True, "channel": json["channel"], "ts": json["ts"]}
+
+        class Resp:
+            def json(self):
+                return resp_data
+
+        return Resp()
+
+
 class TestDryRun:
-    def test_dry_run_when_url_missing(self, event, tmp_path):
+    def test_dry_run_when_token_missing(self, event, tmp_path):
         log = tmp_path / "slack.jsonl"
-        notifier = SlackNotifier(webhook_url=None, dry_run_log=str(log))
+        notifier = SlackNotifier(bot_token=None, dry_run_log=str(log))
         notifier.on_incident_received(event)
 
         assert log.exists()
-        lines = log.read_text().splitlines()
-        assert len(lines) == 1
-        payload = json.loads(lines[0])
-        assert payload["blocks"][0]["type"] == "header"
-        assert "sentry-test" in payload["blocks"][0]["text"]["text"]
+        rows = [json.loads(line) for line in log.read_text().splitlines()]
+        assert len(rows) == 1
+        assert rows[0]["_api"] == "chat.postMessage"
+        assert rows[0]["blocks"][0]["type"] == "header"
 
-    def test_dry_run_appends_each_event(self, event, report, tmp_path):
+    def test_dry_run_full_flow(self, event, report, tmp_path):
         log = tmp_path / "slack.jsonl"
-        notifier = SlackNotifier(webhook_url=None, dry_run_log=str(log))
+        notifier = SlackNotifier(bot_token=None, dry_run_log=str(log))
         notifier.on_incident_received(event)
+        notifier.on_agent_update(event.incident_id, "Triage", "분류 중")
         notifier.on_resolution_ready(report)
 
-        lines = log.read_text().splitlines()
-        assert len(lines) == 2
+        rows = [json.loads(line) for line in log.read_text().splitlines()]
+        # dry-run 에서는 incident_received 후 ts 캐시 미생성 → agent_update 는 skip 로그,
+        # resolution 은 thread 못 찾아 새 메시지로 fallback.
+        apis = [r.get("_api") or r.get("_type") for r in rows]
+        assert "chat.postMessage" in apis  # incident
+        assert "thread_update_skipped" in apis
+        assert apis[-1] == "chat.postMessage"  # resolution fallback
 
-    def test_agent_update_does_not_log(self, tmp_path):
+
+class TestRealMode:
+    def test_incident_then_thread_then_update(self, event, report):
+        fake = _FakeSlack(channel_id="C123")
+        notifier = SlackNotifier(bot_token="xoxb-test", channel="#warroom", http_client=fake)
+
+        notifier.on_incident_received(event)
+        notifier.on_agent_update(event.incident_id, "Triage", "분류 중")
+        notifier.on_resolution_ready(report)
+
+        # 3개 API 호출: postMessage(incident), postMessage(thread reply), chat.update
+        assert len(fake.calls) == 3
+        urls = [c[0] for c in fake.calls]
+        assert urls[0].endswith("/chat.postMessage")
+        assert urls[1].endswith("/chat.postMessage")
+        assert urls[2].endswith("/chat.update")
+
+        # 2번째 호출은 thread_ts 가 1번째의 ts 와 일치해야 함
+        first_ts = fake.calls[0][2].get("ts") or "1700000000.000001"
+        assert fake.calls[1][2]["thread_ts"] == "1700000000.000001"
+        # 3번째 호출 (chat.update) 는 첫 번째 ts 를 갱신
+        assert fake.calls[2][2]["ts"] == "1700000000.000001"
+        del first_ts  # silence unused
+
+    def test_auth_header_is_bearer(self, event):
+        fake = _FakeSlack()
+        notifier = SlackNotifier(bot_token="xoxb-secret", channel="#x", http_client=fake)
+        notifier.on_incident_received(event)
+        headers = fake.calls[0][1]
+        assert headers["Authorization"] == "Bearer xoxb-secret"
+
+    def test_pipeline_failed_replies_to_thread(self, event):
+        fake = _FakeSlack(channel_id="C123")
+        notifier = SlackNotifier(bot_token="xoxb-test", channel="#x", http_client=fake)
+        notifier.on_incident_received(event)
+        notifier.on_pipeline_failed(event.incident_id, "OOM killed")
+
+        assert len(fake.calls) == 2
+        thread_call = fake.calls[1][2]
+        assert thread_call["thread_ts"]  # threaded
+        assert "OOM killed" in thread_call["text"]
+
+
+class TestPersistCallback:
+    def test_persist_called_on_incident_post(self, event):
+        fake = _FakeSlack(channel_id="C999")
+        recorded: list[tuple[str, str, str]] = []
+        notifier = SlackNotifier(
+            bot_token="xoxb-test",
+            channel="#x",
+            http_client=fake,
+            on_thread_persist=lambda iid, ch, ts: recorded.append((iid, ch, ts)),
+        )
+        notifier.on_incident_received(event)
+        assert len(recorded) == 1
+        iid, ch, ts = recorded[0]
+        assert iid == event.incident_id
+        assert ch == "C999"
+        assert ts.startswith("1700000000.")
+
+    def test_lookup_used_on_cache_miss(self, event, report):
+        fake = _FakeSlack(channel_id="C123")
+        # incident_received 를 건너뛰고 바로 resolution 만 호출 → 캐시 miss
+        notifier = SlackNotifier(
+            bot_token="xoxb-test",
+            channel="#x",
+            http_client=fake,
+            thread_lookup=lambda iid: ("C123", "1700000000.999"),
+        )
+        notifier.on_resolution_ready(report)
+
+        # chat.update 로 호출됐어야 함 (lookup 으로 thread 복구)
+        assert len(fake.calls) == 1
+        assert fake.calls[0][0].endswith("/chat.update")
+        assert fake.calls[0][2]["ts"] == "1700000000.999"
+
+
+class TestFailureFallback:
+    def test_slack_api_error_falls_back_to_dry_run(self, event, tmp_path):
         log = tmp_path / "slack.jsonl"
-        notifier = SlackNotifier(webhook_url=None, dry_run_log=str(log))
-        notifier.on_agent_update("Triage Agent", "분류 중...")
-        # 진행 업데이트는 Slack 도배 방지를 위해 무시
-        assert not log.exists()
+        fake = _FakeSlack(responses=[{"ok": False, "error": "channel_not_found"}])
+        notifier = SlackNotifier(
+            bot_token="xoxb-test",
+            channel="#missing",
+            dry_run_log=str(log),
+            http_client=fake,
+        )
+        notifier.on_incident_received(event)
+        rows = [json.loads(line) for line in log.read_text().splitlines()]
+        assert len(rows) == 1
+        assert rows[0]["_error"] == "channel_not_found"
+
+    def test_http_exception_falls_back_to_dry_run(self, event, tmp_path):
+        log = tmp_path / "slack.jsonl"
+
+        class FailingClient:
+            def post(self, url, headers, json, timeout):
+                raise RuntimeError("network down")
+
+        notifier = SlackNotifier(
+            bot_token="xoxb-test",
+            channel="#x",
+            dry_run_log=str(log),
+            http_client=FailingClient(),
+        )
+        notifier.on_incident_received(event)
+        rows = [json.loads(line) for line in log.read_text().splitlines()]
+        assert len(rows) == 1
+        assert "network down" in rows[0]["_exception"]
 
 
 class TestMessageStructure:
-    def test_incident_message_has_source_and_title(self, event, tmp_path):
-        log = tmp_path / "slack.jsonl"
-        notifier = SlackNotifier(webhook_url=None, dry_run_log=str(log))
-        notifier.on_incident_received(event)
-        payload = json.loads(log.read_text().splitlines()[0])
-
-        fields_text = json.dumps(payload, ensure_ascii=False)
-        assert "SENTRY" in fields_text
-        assert "NullPointerException" in fields_text
-
-    def test_resolution_message_includes_severity_emoji(self, report, tmp_path):
-        log = tmp_path / "slack.jsonl"
-        notifier = SlackNotifier(webhook_url=None, dry_run_log=str(log))
+    def test_resolution_blocks_include_severity_and_category(self, report):
+        fake = _FakeSlack()
+        notifier = SlackNotifier(bot_token="xoxb-test", channel="#x", http_client=fake)
+        notifier.on_incident_received(
+            IncidentEvent(incident_id=report.incident_id, source="sentry", title="t", raw_payload={})
+        )
         notifier.on_resolution_ready(report)
-        payload = json.loads(log.read_text().splitlines()[0])
+        update_payload = fake.calls[-1][2]
+        blocks_text = json.dumps(update_payload["blocks"], ensure_ascii=False)
+        assert "HIGH" in blocks_text
+        assert "code" in blocks_text  # category 기본값
+        assert "⚠️" in blocks_text
 
-        header_text = payload["blocks"][0]["text"]["text"]
-        assert "⚠️" in header_text  # HIGH 이모지
-        assert "sentry-test" in header_text
-
-    def test_resolution_message_has_approve_reject_buttons(self, report, tmp_path):
-        log = tmp_path / "slack.jsonl"
-        notifier = SlackNotifier(webhook_url=None, dry_run_log=str(log))
+    def test_resolution_has_approve_reject_buttons(self, report):
+        fake = _FakeSlack()
+        notifier = SlackNotifier(bot_token="xoxb-test", channel="#x", http_client=fake)
+        notifier.on_incident_received(
+            IncidentEvent(incident_id=report.incident_id, source="sentry", title="t", raw_payload={})
+        )
         notifier.on_resolution_ready(report)
-        payload = json.loads(log.read_text().splitlines()[0])
-
-        actions = next(b for b in payload["blocks"] if b["type"] == "actions")
+        blocks = fake.calls[-1][2]["blocks"]
+        actions = next(b for b in blocks if b["type"] == "actions")
         action_ids = [el["action_id"] for el in actions["elements"]]
         assert "warroom_approve" in action_ids
         assert "warroom_reject" in action_ids
-        # 두 버튼 모두 incident_id를 value로 가짐
-        assert all(el["value"] == "sentry-test" for el in actions["elements"])
+        assert all(el["value"] == report.incident_id for el in actions["elements"])
 
 
 class TestTruncation:
-    def test_truncate_short_text_unchanged(self):
+    def test_short_text_unchanged(self):
         assert _truncate("hello", 10) == "hello"
 
-    def test_truncate_exact_length_unchanged(self):
+    def test_exact_length_unchanged(self):
         assert _truncate("x" * 10, 10) == "x" * 10
 
-    def test_truncate_long_text_appends_ellipsis(self):
+    def test_long_text_appends_ellipsis(self):
         result = _truncate("x" * 100, 10)
         assert len(result) == 10
         assert result.endswith("…")
 
-    def test_long_root_cause_truncated_in_message(self, tmp_path):
-        long_rca = "원인" * 1000  # 4000 chars
-        report = ResolutionReport(
+    def test_long_rca_truncated_in_resolution(self, tmp_path):
+        long_rca = "원인" * 2000  # 8000 chars
+        rep = ResolutionReport(
             incident_id="x",
             severity=Severity.HIGH,
             triage_summary="",
@@ -119,56 +250,16 @@ class TestTruncation:
             patch_suggestion="",
             post_mortem_draft="",
         )
-        log = tmp_path / "slack.jsonl"
-        notifier = SlackNotifier(webhook_url=None, dry_run_log=str(log))
-        notifier.on_resolution_ready(report)
-        payload = json.loads(log.read_text().splitlines()[0])
-
+        fake = _FakeSlack()
+        notifier = SlackNotifier(bot_token="xoxb-test", channel="#x", http_client=fake)
+        notifier.on_incident_received(
+            IncidentEvent(incident_id="x", source="sentry", title="t", raw_payload={})
+        )
+        notifier.on_resolution_ready(rep)
+        blocks = fake.calls[-1][2]["blocks"]
         rca_block = next(
             b
-            for b in payload["blocks"]
+            for b in blocks
             if b.get("type") == "section" and "근본 원인" in b.get("text", {}).get("text", "")
         )
         assert "…" in rca_block["text"]["text"]
-
-
-class TestRealSendMode:
-    def test_uses_http_client_when_url_present(self, event):
-        sent = []
-
-        class FakeClient:
-            def post(self, url, json, timeout):
-                sent.append((url, json))
-
-                class Resp:
-                    def raise_for_status(self):
-                        pass
-
-                return Resp()
-
-        notifier = SlackNotifier(
-            webhook_url="https://hooks.slack.com/services/T/B/X",
-            http_client=FakeClient(),
-        )
-        notifier.on_incident_received(event)
-        assert len(sent) == 1
-        url, payload = sent[0]
-        assert url.startswith("https://hooks.slack.com")
-        assert payload["blocks"][0]["type"] == "header"
-
-    def test_falls_back_to_dry_run_on_http_failure(self, event, tmp_path):
-        log = tmp_path / "slack.jsonl"
-
-        class FailingClient:
-            def post(self, url, json, timeout):
-                raise RuntimeError("network down")
-
-        notifier = SlackNotifier(
-            webhook_url="https://hooks.slack.com/services/T/B/X",
-            dry_run_log=str(log),
-            http_client=FailingClient(),
-        )
-        notifier.on_incident_received(event)
-        # 실패 시 dry-run 로그로 폴백
-        assert log.exists()
-        assert len(log.read_text().splitlines()) == 1

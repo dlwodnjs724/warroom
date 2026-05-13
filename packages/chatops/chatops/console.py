@@ -11,8 +11,8 @@ class ConsoleNotifier(Notifier):
         print(f"  제목   : {event.title}")
         print(f"{'=' * 60}\n")
 
-    def on_agent_update(self, agent_name: str, message: str) -> None:
-        print(f"[{agent_name}] {message}")
+    def on_agent_update(self, incident_id: str, agent_name: str, message: str) -> None:
+        print(f"[{agent_name}] ({incident_id}) {message}")
 
     def on_resolution_ready(self, report: ResolutionReport) -> None:
         print(f"\n{'=' * 60}")
@@ -24,3 +24,6 @@ class ConsoleNotifier(Notifier):
         print(f"\n[패치 제안]\n{report.patch_suggestion}")
         print(f"\n[포스트모템 초안]\n{report.post_mortem_draft}")
         print(f"\n{'=' * 60}\n")
+
+    def on_pipeline_failed(self, incident_id: str, error: str) -> None:
+        print(f"\n[WARROOM] ❌ 파이프라인 실패 — {incident_id}: {error}\n")
