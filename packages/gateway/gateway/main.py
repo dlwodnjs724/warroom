@@ -61,6 +61,8 @@ async def _run_pipeline(event: IncidentEvent) -> None:
     notifier = make_notifier(persist_cb=_persist_slack_thread, lookup_cb=_lookup_slack_thread)
     try:
         await store.update_status(event.incident_id, IncidentStatus.ANALYZING)
+        # incident 알림 송신 — sync 한 httpx 호출이라 to_thread 로 이벤트 루프 비점유.
+        await asyncio.to_thread(notifier.on_incident_received, event)
         report = await asyncio.to_thread(run_pipeline, event, notifier)
         await store.save_report(event.incident_id, report)
         await store.update_status(event.incident_id, IncidentStatus.AWAITING_APPROVAL)
