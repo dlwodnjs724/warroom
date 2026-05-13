@@ -30,6 +30,27 @@ from gateway.parsers import sentry as sentry_parser
 from gateway.security import verify_datadog_token, verify_sentry_signature, warn_if_secrets_missing
 from gateway.store import get_store
 
+# 메인 이벤트 루프 참조 — SlackNotifier (sync, CrewAI 워커 스레드에서 호출됨) 가
+# async store 를 호출하기 위한 브리지. lifespan 진입 시 캡처한다.
+_main_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _persist_slack_thread(incident_id: str, channel_id: str, ts: str) -> None:
+    """SlackNotifier 에서 호출되는 sync 콜백 — async store 메서드를 메인 루프에 스케줄."""
+    if _main_loop is None:
+        return
+    asyncio.run_coroutine_threadsafe(get_store().set_slack_thread(incident_id, channel_id, ts), _main_loop)
+
+
+def _lookup_slack_thread(incident_id: str) -> tuple[str, str] | None:
+    if _main_loop is None:
+        return None
+    fut = asyncio.run_coroutine_threadsafe(get_store().get_slack_thread(incident_id), _main_loop)
+    try:
+        return fut.result(timeout=5.0)
+    except Exception:
+        return None
+
 
 async def _run_pipeline(event: IncidentEvent) -> None:
     # orchestrator는 import 지연 (LLM 초기화 비용)
@@ -37,7 +58,7 @@ async def _run_pipeline(event: IncidentEvent) -> None:
     from orchestrator.runner import run_pipeline
 
     store = get_store()
-    notifier = make_notifier()
+    notifier = make_notifier(persist_cb=_persist_slack_thread, lookup_cb=_lookup_slack_thread)
     try:
         await store.update_status(event.incident_id, IncidentStatus.ANALYZING)
         report = await asyncio.to_thread(run_pipeline, event, notifier)
@@ -46,10 +67,16 @@ async def _run_pipeline(event: IncidentEvent) -> None:
     except Exception as e:
         print(f"[ERROR] 파이프라인 실패 ({event.incident_id}): {e}")
         await store.update_status(event.incident_id, IncidentStatus.FAILED)
+        try:
+            await asyncio.to_thread(notifier.on_pipeline_failed, event.incident_id, str(e))
+        except Exception as cb_err:
+            print(f"[ERROR] on_pipeline_failed 콜백 실패: {cb_err}")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _main_loop
+    _main_loop = asyncio.get_running_loop()
     print("[WARROOM] Gateway 시작")
     warn_if_secrets_missing()
     if is_sqlite_backend():
@@ -59,6 +86,7 @@ async def lifespan(app: FastAPI):
         print(f"[WARROOM] DATABASE_URL={current_url()} — `alembic upgrade head` 가 선행되어야 합니다.")
     yield
     print("[WARROOM] Gateway 종료")
+    _main_loop = None
 
 
 app = FastAPI(title="Warroom Event Gateway", lifespan=lifespan)
