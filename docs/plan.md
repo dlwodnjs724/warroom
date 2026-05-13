@@ -127,14 +127,14 @@ flowchart TD
 
 | # | 시나리오 단계 | 현재 구현 | 변경 필요 | 변경 위치 | Phase |
 |---|---|---|---|---|---|
-| 1 | 장애 webhook 수신 | `/webhook/{sentry,datadog}` 동작 | dedupe (fingerprint) 추가 | `gateway/store.py`, `main.py` | 1.1 |
+| 1 | 장애 webhook 수신 | `/webhook/{sentry,datadog}` 동작 | dedupe (fingerprint) 추가 | `gateway/services/ingest.py`, `infrastructure/db/repository.py` | 1.1 |
 | 2 | Triage 분류 | severity 만 | `category` 필드 추가 (code/infra/external/operational) | `common/models.py`, `orchestrator/agents.py` prompt, `runner.py` 파싱 | 1.2 |
 | 3 | infra/external 분기 | Fixer 까지 항상 진행 | category != code 시 Fixer skip, 분석 리포트만 알림 | `orchestrator/runner.py` | 1.3 |
 | 4 | Slack 메인 메시지 송신 | Incoming Webhook (단방향) | Web API (`chat.postMessage`, Bot Token) | `chatops/slack.py` 재작성 | 2.1 |
 | 5 | 에이전트 진행 표시 | `on_agent_update` 가 Slack 무시 | thread reply 로 표시 | `chatops/slack.py` | 2.2 |
 | 6 | 최종 결과 메시지 | 신규 메시지 1건 | 메인 메시지 `chat.update` + 버튼 | `chatops/slack.py` | 2.3 |
-| 7 | thread_ts 보관 | 없음 | IncidentStore 에 컬럼 추가 | `gateway/store.py` schema | 2.4 |
-| 8 | Slack 버튼 클릭 | 시각적으로만 존재 | `/slack/interactions` endpoint (서명 검증) | `gateway/main.py` 신규 | 3.2 |
+| 7 | thread_ts 보관 | 없음 | IncidentRepository 에 컬럼 추가 | `gateway/infrastructure/db/models.py` | 2.4 |
+| 8 | Slack 버튼 클릭 | 시각적으로만 존재 | `/slack/interactions` endpoint (서명 검증) | `gateway/api/slack.py` 신규 + `services/decisions.py` 재사용 | 3.2 |
 | 9 | 거절 사유 캡쳐 | 없음 | Slack modal → 사유 → 컨텍스트 주입 | gateway + orchestrator | 3.4-5 |
 | 10 | PR 내용 | `incidents/<id>.md` 분석 리포트만 | 파일 단위 코드 diff 적용 (hybrid: diff + 리포트) | `orchestrator/agents.py` prompt, `github/app.py` | 4.1-3 |
 | 11 | PR cleanup | 없음 | 거절 시 PR close + branch 삭제 | `github/app.py` | 4.4 |

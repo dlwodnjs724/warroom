@@ -70,7 +70,7 @@ cp .env.example .env
 #    - SQLite (로컬 빠른 체험)  : 별도 작업 불필요. 서버/데모 첫 실행 시 자동 스키마 생성
 #    - MySQL  (dev/prod 권장)   : 컨테이너 띄우고 `alembic upgrade head` 필수
 docker compose up -d
-# .env 에 DATABASE_URL=mysql+aiomysql://warroom:warroom@localhost:3306/warroom 설정
+# .env 에 DATABASE_URL=mysql+asyncmy://warroom:warroom@localhost:3306/warroom 설정
 uv run alembic upgrade head
 # (Test/CI 는 in-memory SQLite — 별도 셋업 불필요)
 
@@ -112,11 +112,12 @@ packages/
 
 | 항목 | 방법 |
 |------|------|
-| Datadog 웹훅 | `gateway/parsers/datadog.py` 추가 |
-| Slack 알림 | `chatops/slack.py` 추가 (`Notifier` 구현) |
-| 실제 Sentry API | `orchestrator/tools/sentry.py` TODO 교체 |
-| GitHub PR 자동 생성 | `packages/github/` (App 미설정 시 dry-run) |
+| 새 모니터링 소스 | `gateway/infrastructure/monitors/<name>.py` 어댑터 + `gateway/api/webhooks.py` 라우터 추가 |
+| 실제 Sentry/GitHub API tool | `orchestrator/tools/{sentry,github}.py` mock 교체 (Phase 6.2) |
+| 멀티 레포 매핑 | `gateway/services/decisions.py` `_open_pr` (현재 단일 `GITHUB_REPO`) |
 | 스키마 변경 | `alembic revision --autogenerate -m "..."` → `alembic upgrade head` |
+
+세부 layer 룰: [`.claude/rules/layering.md`](./.claude/rules/layering.md). 현재 구조: [`docs/architecture.md`](./docs/architecture.md).
 
 ## 외부 서비스 셋업
 

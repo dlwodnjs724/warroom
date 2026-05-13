@@ -79,7 +79,7 @@ curl -X POST https://slack.com/api/auth.test \
 SENTRY_CLIENT_SECRET=<client secret>
 ```
 
-> 이 비밀은 `packages/gateway/gateway/security.py` 의 `verify_sentry_signature` 가 HMAC-SHA256 검증에 사용. **미설정 시 dev 한정으로 검증 스킵** (운영에선 반드시 채워야 함).
+> 이 비밀은 `packages/gateway/gateway/infrastructure/monitors/security.py` 의 `verify_sentry_signature` 가 HMAC-SHA256 검증에 사용. **미설정 시 dev 한정으로 검증 스킵** (운영에선 반드시 채워야 함).
 
 ### Alert Rule 등록 (실제로 webhook 트리거)
 
