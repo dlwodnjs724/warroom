@@ -130,4 +130,5 @@ packages/
 - 외부 API 실패 시 크래시 없이 dry-run 폴백 (Slack, GitHub 모두)
 - API Key/Private Key 는 `.env` / `.secrets/` 만, 코드 하드코딩 금지
 - DB: dev/prod = MySQL (docker-compose), test/ci = in-memory SQLite. `DATABASE_URL` 환경변수 분기. 스키마 변경은 Alembic revision 으로
+- 스키마 초기화: SQLite 면 lifespan/demo 가 `metadata.create_all` 자동 실행, MySQL 이면 자동 셋업 비활성 — `alembic upgrade head` 가 운영 진입의 전제 조건
 - Fixer 출력 코드는 PR 본문에 첨부되며 자동 merge 없음 (HITL 필수)

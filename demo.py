@@ -41,7 +41,7 @@ if not _USE_MOCK:
 
 from chatops.factory import make_notifier
 from common.models import IncidentStatus
-from gateway.db.session import init_schema
+from gateway.db.session import init_schema, is_sqlite_backend
 from gateway.parsers import sentry as sentry_parser
 from gateway.store import get_store
 from orchestrator.runner import run_pipeline
@@ -100,7 +100,8 @@ def human_approval() -> bool:
 
 
 async def main():
-    await init_schema()  # 로컬 dev 편의 — alembic 안 쓸 때 스키마 자동 생성
+    if is_sqlite_backend():
+        await init_schema()
     store = get_store()
     notifier = make_notifier()
 

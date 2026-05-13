@@ -24,7 +24,7 @@ load_dotenv()
 from common.models import IncidentCategory, IncidentEvent, IncidentStatus, ResolutionReport, Severity
 from gateway.parsers import datadog as datadog_parser
 from gateway.parsers import sentry as sentry_parser
-from gateway.db.session import init_schema
+from gateway.db.session import current_url, init_schema, is_sqlite_backend
 from gateway.security import verify_datadog_token, verify_sentry_signature, warn_if_secrets_missing
 from gateway.store import get_store
 
@@ -50,8 +50,11 @@ async def _run_pipeline(event: IncidentEvent) -> None:
 async def lifespan(app: FastAPI):
     print("[WARROOM] Gateway 시작")
     warn_if_secrets_missing()
-    # Alembic 안 돌렸을 때 dev 편의용 자동 스키마 생성. 운영은 alembic upgrade 사용 권장.
-    await init_schema()
+    if is_sqlite_backend():
+        await init_schema()
+        print(f"[WARROOM] SQLite 자동 스키마 셋업 완료 ({current_url()})")
+    else:
+        print(f"[WARROOM] DATABASE_URL={current_url()} — `alembic upgrade head` 가 선행되어야 합니다.")
     yield
     print("[WARROOM] Gateway 종료")
 

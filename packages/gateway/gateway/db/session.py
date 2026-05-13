@@ -20,11 +20,19 @@ _engine: AsyncEngine | None = None
 _factory: async_sessionmaker[AsyncSession] | None = None
 
 
+def current_url() -> str:
+    return os.getenv("DATABASE_URL", _DEFAULT_URL)
+
+
+def is_sqlite_backend() -> bool:
+    """SQLite 백엔드 여부. dev/test 자동 스키마 생성을 분기하는 데 사용한다."""
+    return current_url().startswith("sqlite")
+
+
 def get_engine() -> AsyncEngine:
     global _engine
     if _engine is None:
-        url = os.getenv("DATABASE_URL", _DEFAULT_URL)
-        _engine = create_async_engine(url, echo=False, pool_pre_ping=True)
+        _engine = create_async_engine(current_url(), echo=False, pool_pre_ping=True)
     return _engine
 
 
@@ -45,8 +53,7 @@ def reset_engine() -> None:
 async def init_schema() -> None:
     """현재 엔진에 metadata.create_all 을 실행한다.
 
-    Alembic 마이그레이션을 쓰는 운영 환경에서는 호출하지 않아도 되지만,
-    demo/dev SQLite 자동 셋업과 테스트에서 편의를 위해 제공한다.
+    SQLite (dev/test) 자동 셋업 전용. MySQL 운영에서는 호출하지 말고 `alembic upgrade head` 사용.
     """
     from gateway.db.models import Base
 

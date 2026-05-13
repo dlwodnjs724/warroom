@@ -65,7 +65,9 @@ cp .env.example .env
 # Anthropic 사용 시: LLM_PROVIDER=anthropic + ANTHROPIC_API_KEY 입력
 # 비용 없이 흐름만 검증할 때: MOCK_PIPELINE=true
 
-# 3. (dev/prod) MySQL 컨테이너 + 마이그레이션
+# 3. DB 셋업
+#    - SQLite (로컬 빠른 체험)  : 별도 작업 불필요. 서버/데모 첫 실행 시 자동 스키마 생성
+#    - MySQL  (dev/prod 권장)   : 컨테이너 띄우고 `alembic upgrade head` 필수
 docker compose up -d
 # .env 에 DATABASE_URL=mysql+aiomysql://warroom:warroom@localhost:3306/warroom 설정
 uv run alembic upgrade head
