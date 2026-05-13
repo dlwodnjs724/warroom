@@ -4,7 +4,7 @@ AI Agent 기반 서비스 장애 탐지·대응 자동화 시스템. uv workspac
 
 상세 설계: `docs/decisions.md` / 아키텍처: `docs/architecture.md` / 구현 플랜: `docs/plan.md`
 
-엔지니어링 컨벤션: @.claude/rules/db.md / @.claude/rules/testing.md / @.claude/rules/async.md / @.claude/rules/datetime.md
+엔지니어링 컨벤션: @.claude/rules/db.md / @.claude/rules/testing.md / @.claude/rules/async.md / @.claude/rules/datetime.md / @.claude/rules/lint.md
 
 ## 실행
 

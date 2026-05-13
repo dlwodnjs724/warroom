@@ -1,0 +1,14 @@
+# pre-commit framework — commit 시 ruff format + lint 자동 강제
+#
+# 설치 (첫 clone 시 1회):
+#   uv run pre-commit install
+#
+# 전체 일괄 검사:
+#   uv run pre-commit run --all-files
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.7.0
+    hooks:
+      - id: ruff-format
+      - id: ruff
+        args: [--fix]

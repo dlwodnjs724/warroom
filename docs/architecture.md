@@ -79,7 +79,9 @@ sequenceDiagram
 
 ```
 packages/
-├── common/          # 공유 모델 (IncidentEvent, ResolutionReport, Severity, Status)
+├── common/          # 공유 모델 + 표준 시간
+│   ├── models.py    # IncidentEvent, ResolutionReport, Severity, Status (StrEnum)
+│   └── clock.py     # APP_TZ + now() — 모든 timestamp 의 단일 소스
 │
 ├── gateway/         # Event Gateway
 │   ├── main.py      # FastAPI 엔드포인트 (webhook, incidents, approve/reject)

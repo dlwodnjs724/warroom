@@ -58,6 +58,9 @@ LLM provider는 환경변수로 전환 (`LLM_PROVIDER=gemini|anthropic|ollama`).
 uv sync --all-packages
 uv pip install -e packages/common -e packages/gateway -e packages/orchestrator -e packages/chatops -e packages/github
 
+# 1-1. pre-commit hook 설치 (commit 시 ruff format/lint 자동 강제)
+uv run pre-commit install
+
 # 2. 환경변수 설정
 cp .env.example .env
 # 기본은 Gemini Free Tier — .env 에 GEMINI_API_KEY 입력
