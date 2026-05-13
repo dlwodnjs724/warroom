@@ -1,84 +1,29 @@
-"""
-Event Gateway — FastAPI webhook receiver.
+"""Event Gateway — composition root.
 
-엔드포인트:
-  POST /webhook/sentry          Sentry 웹훅 수신
-  POST /webhook/datadog         Datadog 웹훅 수신
-  GET  /incidents               처리된 인시던트 목록
-  POST /incidents/{id}/approve  패치 제안 승인
-  POST /incidents/{id}/reject   패치 제안 반려
+FastAPI 앱을 조립한다. 책임 분담:
+    - api/         : HTTP 라우터 (webhooks, incidents)
+    - services/    : 유스케이스 (ingest, pipeline, decisions)
+    - infrastructure/ : DB, monitors (외부 입력 어댑터), security, store
 """
 
 import asyncio
-import json
-import os
 from contextlib import asynccontextmanager
-from datetime import datetime
-from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI
 
 load_dotenv()
 
-from common.models import IncidentCategory, IncidentEvent, IncidentStatus, ResolutionReport, Severity
-
-from gateway.db.session import current_url, init_schema, is_sqlite_backend
-from gateway.parsers import datadog as datadog_parser
-from gateway.parsers import sentry as sentry_parser
-from gateway.security import verify_datadog_token, verify_sentry_signature, warn_if_secrets_missing
-from gateway.store import get_store
-
-# 메인 이벤트 루프 참조 — SlackNotifier (sync, CrewAI 워커 스레드에서 호출됨) 가
-# async store 를 호출하기 위한 브리지. lifespan 진입 시 캡처한다.
-_main_loop: asyncio.AbstractEventLoop | None = None
-
-
-def _persist_slack_thread(incident_id: str, channel_id: str, ts: str) -> None:
-    """SlackNotifier 에서 호출되는 sync 콜백 — async store 메서드를 메인 루프에 스케줄."""
-    if _main_loop is None:
-        return
-    asyncio.run_coroutine_threadsafe(get_store().set_slack_thread(incident_id, channel_id, ts), _main_loop)
-
-
-def _lookup_slack_thread(incident_id: str) -> tuple[str, str] | None:
-    if _main_loop is None:
-        return None
-    fut = asyncio.run_coroutine_threadsafe(get_store().get_slack_thread(incident_id), _main_loop)
-    try:
-        return fut.result(timeout=5.0)
-    except Exception:
-        return None
-
-
-async def _run_pipeline(event: IncidentEvent) -> None:
-    # orchestrator는 import 지연 (LLM 초기화 비용)
-    from chatops.factory import make_notifier
-    from orchestrator.runner import run_pipeline
-
-    store = get_store()
-    notifier = make_notifier(persist_cb=_persist_slack_thread, lookup_cb=_lookup_slack_thread)
-    try:
-        await store.update_status(event.incident_id, IncidentStatus.ANALYZING)
-        # incident 알림 송신 — sync 한 httpx 호출이라 to_thread 로 이벤트 루프 비점유.
-        await asyncio.to_thread(notifier.on_incident_received, event)
-        report = await asyncio.to_thread(run_pipeline, event, notifier)
-        await store.save_report(event.incident_id, report)
-        await store.update_status(event.incident_id, IncidentStatus.AWAITING_APPROVAL)
-    except Exception as e:
-        print(f"[ERROR] 파이프라인 실패 ({event.incident_id}): {e}")
-        await store.update_status(event.incident_id, IncidentStatus.FAILED)
-        try:
-            await asyncio.to_thread(notifier.on_pipeline_failed, event.incident_id, str(e))
-        except Exception as cb_err:
-            print(f"[ERROR] on_pipeline_failed 콜백 실패: {cb_err}")
+from gateway.api.incidents import router as incidents_router
+from gateway.api.webhooks import router as webhooks_router
+from gateway.infrastructure.db.session import current_url, init_schema, is_sqlite_backend
+from gateway.infrastructure.monitors.security import warn_if_secrets_missing
+from gateway.services.pipeline import set_main_loop
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _main_loop
-    _main_loop = asyncio.get_running_loop()
+    set_main_loop(asyncio.get_running_loop())
     print("[WARROOM] Gateway 시작")
     warn_if_secrets_missing()
     if is_sqlite_backend():
@@ -88,149 +33,9 @@ async def lifespan(app: FastAPI):
         print(f"[WARROOM] DATABASE_URL={current_url()} — `alembic upgrade head` 가 선행되어야 합니다.")
     yield
     print("[WARROOM] Gateway 종료")
-    _main_loop = None
+    set_main_loop(None)
 
 
 app = FastAPI(title="Warroom Event Gateway", lifespan=lifespan)
-
-
-@app.post("/webhook/sentry", status_code=202)
-async def webhook_sentry(
-    request: Request,
-    background_tasks: BackgroundTasks,
-    sentry_hook_signature: str | None = Header(default=None),
-):
-    """Sentry 웹훅 수신 — 즉시 202 반환 후 백그라운드에서 파이프라인 실행."""
-    body = await request.body()
-    if not verify_sentry_signature(body, sentry_hook_signature):
-        raise HTTPException(status_code=401, detail="Invalid Sentry signature")
-    payload = json.loads(body)
-    return await _ingest(sentry_parser.parse(payload), background_tasks)
-
-
-@app.post("/webhook/datadog", status_code=202)
-async def webhook_datadog(
-    payload: dict[str, Any],
-    background_tasks: BackgroundTasks,
-    x_warroom_token: str | None = Header(default=None),
-):
-    """Datadog 웹훅 수신 — Monitor/Incident 페이로드 모두 처리."""
-    if not verify_datadog_token(x_warroom_token):
-        raise HTTPException(status_code=401, detail="Invalid Datadog token")
-    return await _ingest(datadog_parser.parse(payload), background_tasks)
-
-
-async def _ingest(event: IncidentEvent, background_tasks: BackgroundTasks) -> dict:
-    """파싱된 IncidentEvent 를 dedupe 처리 후 파이프라인에 흘려보낸다."""
-    store = get_store()
-    existing = await store.get(event.incident_id)
-    if existing:
-        count = await store.increment_dupe_count(event.incident_id)
-        print(f"[WARROOM] 중복 수신 — {event.incident_id} (총 {count}건). 기존 파이프라인 유지.")
-        return {
-            "incident_id": event.incident_id,
-            "status": "duplicate",
-            "dupe_count": count,
-        }
-    await store.add(event)
-    background_tasks.add_task(_run_pipeline, event)
-    return {"incident_id": event.incident_id, "status": "accepted"}
-
-
-@app.get("/incidents")
-async def list_incidents():
-    """처리된 인시던트 목록 조회."""
-    return await get_store().list_all()
-
-
-@app.get("/incidents/{incident_id}")
-async def get_incident(incident_id: str):
-    entry = await get_store().get(incident_id)
-    if not entry:
-        raise HTTPException(status_code=404, detail="인시던트를 찾을 수 없습니다.")
-    return entry
-
-
-@app.post("/incidents/{incident_id}/approve")
-async def approve_incident(incident_id: str):
-    """패치 제안 승인 (Human-in-the-Loop)."""
-    return await _handle_decision(incident_id, approved=True)
-
-
-@app.post("/incidents/{incident_id}/reject")
-async def reject_incident(incident_id: str):
-    """패치 제안 반려 (Human-in-the-Loop)."""
-    return await _handle_decision(incident_id, approved=False)
-
-
-async def _handle_decision(incident_id: str, approved: bool) -> JSONResponse:
-    store = get_store()
-    entry = await store.get(incident_id)
-    if not entry:
-        raise HTTPException(status_code=404, detail="인시던트를 찾을 수 없습니다.")
-    if entry["status"] != IncidentStatus.AWAITING_APPROVAL:
-        raise HTTPException(
-            status_code=409,
-            detail=f"승인 대기 상태가 아닙니다. 현재 상태: {entry['status']}",
-        )
-
-    status = IncidentStatus.APPROVED if approved else IncidentStatus.REJECTED
-    await store.update_status(incident_id, status, is_approved=approved)
-
-    action = "승인" if approved else "반려"
-    print(f"[WARROOM] 인시던트 {incident_id} {action} 처리 완료")
-
-    response: dict[str, object] = {
-        "incident_id": incident_id,
-        "status": status,
-        "action": action,
-    }
-    if approved:
-        pr_result = _open_pr(entry)
-        if pr_result:
-            response["pull_request"] = pr_result
-
-    return JSONResponse(response)
-
-
-def _open_pr(entry: dict) -> dict | None:
-    """승인된 인시던트로 PR 을 만든다. GITHUB_REPO 미설정 시 skip."""
-    repo = os.getenv("GITHUB_REPO")
-    if not repo:
-        print("[WARROOM] GITHUB_REPO 미설정 — PR 생성 건너뜀")
-        return None
-
-    report_dict = entry.get("report")
-    if not report_dict:
-        print("[WARROOM] 리포트가 없어 PR 생성 건너뜀")
-        return None
-
-    category = report_dict.get("category", "code")
-    if category != "code":
-        print(f"[WARROOM] 카테고리 '{category}' — 코드 외 장애로 PR 생성 건너뜀")
-        return {"skipped": True, "reason": f"category={category}"}
-
-    from github.factory import make_github_client
-
-    created_at = report_dict["created_at"]
-    if isinstance(created_at, str):
-        created_at = datetime.fromisoformat(created_at)
-    report = ResolutionReport(
-        incident_id=entry["incident_id"],
-        severity=Severity(report_dict["severity"]),
-        category=IncidentCategory(report_dict.get("category", "code")),
-        triage_summary=report_dict["triage_summary"] or "",
-        root_cause=report_dict["root_cause"] or "",
-        patch_suggestion=report_dict["patch_suggestion"] or "",
-        post_mortem_draft=report_dict["post_mortem_draft"] or "",
-        is_approved=True,
-        created_at=created_at,
-    )
-    client = make_github_client()
-    result = client.create_patch_pr(report, repo=repo)
-    return {
-        "url": result.pr_url,
-        "branch": result.branch,
-        "number": result.pr_number,
-        "dry_run": result.dry_run,
-    }
+app.include_router(webhooks_router)
+app.include_router(incidents_router)

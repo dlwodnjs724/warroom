@@ -22,7 +22,7 @@ for pkg in ("common", "gateway"):
     if src.is_dir() and str(src) not in sys.path:
         sys.path.insert(0, str(src))
 
-from gateway.db.models import Base
+from gateway.infrastructure.db.models import Base
 
 config = context.config
 

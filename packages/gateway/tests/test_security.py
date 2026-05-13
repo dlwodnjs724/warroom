@@ -3,7 +3,7 @@
 import hashlib
 import hmac
 
-from gateway.security import verify_datadog_token, verify_sentry_signature
+from gateway.infrastructure.monitors.security import verify_datadog_token, verify_sentry_signature
 
 
 def _sign(secret: str, body: bytes) -> str:

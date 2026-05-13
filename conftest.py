@@ -27,11 +27,11 @@ def _isolate_db(monkeypatch):
     ):
         monkeypatch.delenv(var, raising=False)
 
-    from gateway import store as store_mod
-    from gateway.db import session as session_mod
+    from gateway.infrastructure.db import repository as repo_mod
+    from gateway.infrastructure.db import session as session_mod
 
     session_mod.reset_engine()
-    store_mod.reset_store()
+    repo_mod.reset_repository()
     yield
     session_mod.reset_engine()
-    store_mod.reset_store()
+    repo_mod.reset_repository()

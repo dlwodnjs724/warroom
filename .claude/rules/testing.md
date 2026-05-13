@@ -4,7 +4,7 @@
 
 | 위치 | 용도 |
 |---|---|
-| `packages/<pkg>/tests/` | 단일 패키지 단위 테스트 (store, parser, security, ...) |
+| `packages/<pkg>/tests/` | 단일 패키지 단위 테스트 (repository, monitor, security, ...) |
 | `tests/` | 크로스-패키지 통합 (gateway + orchestrator + chatops + github) |
 
 새 단위 테스트는 패키지 안에. `tests/` 는 통합 한정.
@@ -30,13 +30,13 @@ find tests packages/*/tests -name __init__.py   # 비어 있어야 한다
 
 ```python
 # ✅ YES (mark 없음)
-async def test_store_add():
-    store = get_store()
-    await store.add(event)
+async def test_repo_add():
+    repo = get_repository()
+    await repo.add(event)
 
 # ❌ NO — 중복
 @pytest.mark.asyncio   # 불필요
-async def test_store_add(): ...
+async def test_repo_add(): ...
 ```
 
 ## 4. DB 격리 — autouse fixture
@@ -44,14 +44,14 @@ async def test_store_add(): ...
 root `conftest.py` 의 `_isolate_db` 가 자동으로:
 
 - `DATABASE_URL=sqlite+aiosqlite:///:memory:` 강제
-- 매 테스트 시작/종료에 `reset_engine()` + `reset_store()`
+- 매 테스트 시작/종료에 `reset_engine()` + `reset_repository()`
 
 → 테스트 코드에서 `DATABASE_URL` 직접 만지지 말 것.
 
 스키마 생성:
 
 - **gateway 통합 테스트**: `with TestClient(app) as c:` 로 lifespan 트리거 — 자동
-- **store 단위 테스트**: `schema` fixture (`packages/gateway/tests/conftest.py`) 명시 주입
+- **repository 단위 테스트**: `schema` fixture (`packages/gateway/tests/conftest.py`) 명시 주입
 
 ## 5. LLM 호출은 `MOCK_PIPELINE=true` 로 봉인
 

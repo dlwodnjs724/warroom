@@ -1,4 +1,4 @@
-"""인시던트 영속화 — Async SQLAlchemy 2.0.
+"""인시던트 영속화 Repository — Async SQLAlchemy 2.0.
 
 백엔드는 DATABASE_URL 환경변수로 결정 (sqlite vs mysql). 자세한 정책은
 docs/plan.md 의 환경 매트릭스 참조.
@@ -9,11 +9,11 @@ from datetime import datetime
 from common.models import IncidentEvent, IncidentStatus, ResolutionReport
 from sqlalchemy import select
 
-from gateway.db.models import Incident, Report
-from gateway.db.session import get_session_factory
+from gateway.infrastructure.db.models import Incident, Report
+from gateway.infrastructure.db.session import get_session_factory
 
 
-class IncidentStore:
+class IncidentRepository:
     async def add(self, event: IncidentEvent) -> None:
         """incident 를 새로 등록한다. 동일 ID 가 있으면 report 까지 초기화한다."""
         sf = get_session_factory()
@@ -168,17 +168,17 @@ def _report_to_dict(report: Report) -> dict:
     }
 
 
-_store: IncidentStore | None = None
+_repository: IncidentRepository | None = None
 
 
-def get_store() -> IncidentStore:
-    global _store
-    if _store is None:
-        _store = IncidentStore()
-    return _store
+def get_repository() -> IncidentRepository:
+    global _repository
+    if _repository is None:
+        _repository = IncidentRepository()
+    return _repository
 
 
-def reset_store() -> None:
-    """테스트 격리용 — 캐시된 store 객체를 폐기한다."""
-    global _store
-    _store = None
+def reset_repository() -> None:
+    """테스트 격리용 — 캐시된 repository 객체를 폐기한다."""
+    global _repository
+    _repository = None

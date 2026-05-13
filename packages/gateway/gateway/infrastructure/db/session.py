@@ -56,7 +56,7 @@ async def init_schema() -> None:
 
     SQLite (dev/test) 자동 셋업 전용. MySQL 운영에서는 호출하지 말고 `alembic upgrade head` 사용.
     """
-    from gateway.db.models import Base
+    from gateway.infrastructure.db.models import Base
 
     engine = get_engine()
     async with engine.begin() as conn:

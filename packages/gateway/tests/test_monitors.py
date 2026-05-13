@@ -1,7 +1,7 @@
-"""웹훅 파서 단위 테스트."""
+"""모니터 어댑터 (Sentry/Datadog webhook → IncidentEvent) 단위 테스트."""
 
-from gateway.parsers import datadog as datadog_parser
-from gateway.parsers import sentry as sentry_parser
+from gateway.infrastructure.monitors import datadog as datadog_parser
+from gateway.infrastructure.monitors import sentry as sentry_parser
 
 
 class TestSentryParser:

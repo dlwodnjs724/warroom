@@ -42,9 +42,9 @@ if not _USE_MOCK:
 
 from chatops.factory import make_notifier
 from common.models import IncidentStatus
-from gateway.db.session import init_schema, is_sqlite_backend
-from gateway.parsers import sentry as sentry_parser
-from gateway.store import get_store
+from gateway.infrastructure.db.repository import get_repository
+from gateway.infrastructure.db.session import init_schema, is_sqlite_backend
+from gateway.infrastructure.monitors import sentry as sentry_parser
 from orchestrator.runner import run_pipeline
 
 MOCK_SENTRY_PAYLOAD = {
@@ -102,7 +102,7 @@ def human_approval() -> bool:
 async def main():
     if is_sqlite_backend():
         await init_schema()
-    store = get_store()
+    repo = get_repository()
     notifier = make_notifier()
 
     print("\n[WARROOM] 프로토타입 시작")
@@ -110,17 +110,17 @@ async def main():
 
     # 1. 파싱
     event = sentry_parser.parse(MOCK_SENTRY_PAYLOAD)
-    await store.add(event)
+    await repo.add(event)
     notifier.on_incident_received(event)
 
     # 2. 에이전트 파이프라인 (sync) — to_thread 로 이벤트 루프 비점유
     try:
-        await store.update_status(event.incident_id, IncidentStatus.ANALYZING)
+        await repo.update_status(event.incident_id, IncidentStatus.ANALYZING)
         report = await asyncio.to_thread(run_pipeline, event, notifier)
-        await store.save_report(event.incident_id, report)
-        await store.update_status(event.incident_id, IncidentStatus.AWAITING_APPROVAL)
+        await repo.save_report(event.incident_id, report)
+        await repo.update_status(event.incident_id, IncidentStatus.AWAITING_APPROVAL)
     except Exception as e:
-        await store.update_status(event.incident_id, IncidentStatus.FAILED)
+        await repo.update_status(event.incident_id, IncidentStatus.FAILED)
         print(f"\n[오류] 파이프라인 실행 실패: {e}")
         sys.exit(1)
 
@@ -128,7 +128,7 @@ async def main():
     approved = human_approval()
     report.is_approved = approved
     final_status = IncidentStatus.APPROVED if approved else IncidentStatus.REJECTED
-    await store.update_status(event.incident_id, final_status, is_approved=approved)
+    await repo.update_status(event.incident_id, final_status, is_approved=approved)
 
     # 4. JSON 산출물 (가독용 보조 출력)
     path = save_report_json(report)

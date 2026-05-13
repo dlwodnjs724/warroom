@@ -16,6 +16,9 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
+# services.ingest 가 BackgroundTasks 에 추가하는 함수. 여기를 patch 해 파이프라인을 봉인.
+_PIPELINE_TARGET = "gateway.services.ingest.run_incident_pipeline"
+
 
 @pytest.fixture
 def client(monkeypatch):
@@ -23,7 +26,7 @@ def client(monkeypatch):
     import gateway.main as main_mod
 
     with TestClient(main_mod.app) as c:
-        yield c, main_mod
+        yield c
 
 
 SENTRY_PAYLOAD = {
@@ -34,9 +37,8 @@ SENTRY_PAYLOAD = {
 
 class TestSentryWebhookDedupe:
     def test_first_event_is_accepted_and_runs_pipeline(self, client):
-        c, main_mod = client
-        with patch.object(main_mod, "_run_pipeline") as run:
-            resp = c.post("/webhook/sentry", json=SENTRY_PAYLOAD)
+        with patch(_PIPELINE_TARGET) as run:
+            resp = client.post("/webhook/sentry", json=SENTRY_PAYLOAD)
 
         assert resp.status_code == 202
         assert resp.json()["status"] == "accepted"
@@ -44,12 +46,11 @@ class TestSentryWebhookDedupe:
         run.assert_called_once()
 
     def test_duplicate_event_returns_duplicate_without_pipeline(self, client):
-        c, main_mod = client
-        with patch.object(main_mod, "_run_pipeline"):
-            c.post("/webhook/sentry", json=SENTRY_PAYLOAD)
+        with patch(_PIPELINE_TARGET):
+            client.post("/webhook/sentry", json=SENTRY_PAYLOAD)
 
-        with patch.object(main_mod, "_run_pipeline") as run:
-            resp = c.post("/webhook/sentry", json=SENTRY_PAYLOAD)
+        with patch(_PIPELINE_TARGET) as run:
+            resp = client.post("/webhook/sentry", json=SENTRY_PAYLOAD)
 
         assert resp.status_code == 202
         body = resp.json()
@@ -58,19 +59,18 @@ class TestSentryWebhookDedupe:
         run.assert_not_called()
 
     def test_repeated_duplicates_increment_counter(self, client):
-        c, main_mod = client
-        with patch.object(main_mod, "_run_pipeline"):
-            c.post("/webhook/sentry", json=SENTRY_PAYLOAD)
+        with patch(_PIPELINE_TARGET):
+            client.post("/webhook/sentry", json=SENTRY_PAYLOAD)
         for expected in (2, 3, 4):
-            with patch.object(main_mod, "_run_pipeline"):
-                resp = c.post("/webhook/sentry", json=SENTRY_PAYLOAD)
+            with patch(_PIPELINE_TARGET):
+                resp = client.post("/webhook/sentry", json=SENTRY_PAYLOAD)
             assert resp.json()["dupe_count"] == expected
 
 
 class TestApprovalPrSkip:
     """승인 시 category 가 code 가 아니면 PR 생성을 건너뛴다."""
 
-    async def _seed_incident(self, main_mod, category):
+    async def _seed_incident(self, category):
         from common.models import (
             IncidentCategory,
             IncidentEvent,
@@ -78,15 +78,16 @@ class TestApprovalPrSkip:
             ResolutionReport,
             Severity,
         )
+        from gateway.infrastructure.db.repository import get_repository
 
-        store = main_mod.get_store()
+        repo = get_repository()
         event = IncidentEvent(
             incident_id=f"INC-{category}-1",
             source="sentry",
             title="test",
             raw_payload={},
         )
-        await store.add(event)
+        await repo.add(event)
         report = ResolutionReport(
             incident_id=event.incident_id,
             severity=Severity.HIGH,
@@ -96,45 +97,41 @@ class TestApprovalPrSkip:
             patch_suggestion="p" if category == "code" else "",
             post_mortem_draft="pm",
         )
-        await store.save_report(event.incident_id, report)
-        await store.update_status(event.incident_id, IncidentStatus.AWAITING_APPROVAL)
+        await repo.save_report(event.incident_id, report)
+        await repo.update_status(event.incident_id, IncidentStatus.AWAITING_APPROVAL)
         return event.incident_id
 
     async def test_code_category_attempts_pr(self, client, monkeypatch):
-        c, main_mod = client
         monkeypatch.setenv("GITHUB_REPO", "owner/demo")
-        incident_id = await self._seed_incident(main_mod, "code")
+        incident_id = await self._seed_incident("code")
 
-        resp = c.post(f"/incidents/{incident_id}/approve")
+        resp = client.post(f"/incidents/{incident_id}/approve")
         assert resp.status_code == 200
         body = resp.json()
         assert "pull_request" in body
         assert body["pull_request"]["dry_run"] is True
 
     async def test_infra_category_skips_pr(self, client, monkeypatch):
-        c, main_mod = client
         monkeypatch.setenv("GITHUB_REPO", "owner/demo")
-        incident_id = await self._seed_incident(main_mod, "infra")
+        incident_id = await self._seed_incident("infra")
 
-        resp = c.post(f"/incidents/{incident_id}/approve")
+        resp = client.post(f"/incidents/{incident_id}/approve")
         body = resp.json()
         assert body["pull_request"]["skipped"] is True
         assert "infra" in body["pull_request"]["reason"]
 
     async def test_external_category_skips_pr(self, client, monkeypatch):
-        c, main_mod = client
         monkeypatch.setenv("GITHUB_REPO", "owner/demo")
-        incident_id = await self._seed_incident(main_mod, "external")
+        incident_id = await self._seed_incident("external")
 
-        resp = c.post(f"/incidents/{incident_id}/approve")
+        resp = client.post(f"/incidents/{incident_id}/approve")
         assert resp.json()["pull_request"]["skipped"] is True
 
 
 class TestWebhookSignatureVerification:
     def test_sentry_rejects_invalid_signature(self, client, monkeypatch):
-        c, _ = client
         monkeypatch.setenv("SENTRY_CLIENT_SECRET", "topsecret")
-        resp = c.post(
+        resp = client.post(
             "/webhook/sentry",
             json=SENTRY_PAYLOAD,
             headers={"Sentry-Hook-Signature": "wrong-sig"},
@@ -142,19 +139,17 @@ class TestWebhookSignatureVerification:
         assert resp.status_code == 401
 
     def test_sentry_rejects_missing_signature(self, client, monkeypatch):
-        c, _ = client
         monkeypatch.setenv("SENTRY_CLIENT_SECRET", "topsecret")
-        resp = c.post("/webhook/sentry", json=SENTRY_PAYLOAD)
+        resp = client.post("/webhook/sentry", json=SENTRY_PAYLOAD)
         assert resp.status_code == 401
 
     def test_sentry_accepts_valid_signature(self, client, monkeypatch):
-        c, main_mod = client
         monkeypatch.setenv("SENTRY_CLIENT_SECRET", "topsecret")
         body = json.dumps(SENTRY_PAYLOAD).encode("utf-8")
         sig = hmac.new(b"topsecret", body, hashlib.sha256).hexdigest()
 
-        with patch.object(main_mod, "_run_pipeline"):
-            resp = c.post(
+        with patch(_PIPELINE_TARGET):
+            resp = client.post(
                 "/webhook/sentry",
                 content=body,
                 headers={
@@ -165,9 +160,8 @@ class TestWebhookSignatureVerification:
         assert resp.status_code == 202
 
     def test_datadog_rejects_wrong_token(self, client, monkeypatch):
-        c, _ = client
         monkeypatch.setenv("WARROOM_DATADOG_TOKEN", "shared-xyz")
-        resp = c.post(
+        resp = client.post(
             "/webhook/datadog",
             json={"id": "x", "title": "t"},
             headers={"X-Warroom-Token": "nope"},
@@ -175,10 +169,9 @@ class TestWebhookSignatureVerification:
         assert resp.status_code == 401
 
     def test_datadog_accepts_valid_token(self, client, monkeypatch):
-        c, main_mod = client
         monkeypatch.setenv("WARROOM_DATADOG_TOKEN", "shared-xyz")
-        with patch.object(main_mod, "_run_pipeline"):
-            resp = c.post(
+        with patch(_PIPELINE_TARGET):
+            resp = client.post(
                 "/webhook/datadog",
                 json={"id": "dd-sig-1", "title": "t"},
                 headers={"X-Warroom-Token": "shared-xyz"},
@@ -190,17 +183,15 @@ class TestDatadogWebhookDedupe:
     DD_PAYLOAD = {"id": "dd-mon-1", "title": "CPU high", "alert_type": "error"}
 
     def test_first_datadog_event_accepted(self, client):
-        c, main_mod = client
-        with patch.object(main_mod, "_run_pipeline") as run:
-            resp = c.post("/webhook/datadog", json=self.DD_PAYLOAD)
+        with patch(_PIPELINE_TARGET) as run:
+            resp = client.post("/webhook/datadog", json=self.DD_PAYLOAD)
         assert resp.json()["status"] == "accepted"
         run.assert_called_once()
 
     def test_datadog_duplicate_skipped(self, client):
-        c, main_mod = client
-        with patch.object(main_mod, "_run_pipeline"):
-            c.post("/webhook/datadog", json=self.DD_PAYLOAD)
-        with patch.object(main_mod, "_run_pipeline") as run:
-            resp = c.post("/webhook/datadog", json=self.DD_PAYLOAD)
+        with patch(_PIPELINE_TARGET):
+            client.post("/webhook/datadog", json=self.DD_PAYLOAD)
+        with patch(_PIPELINE_TARGET) as run:
+            resp = client.post("/webhook/datadog", json=self.DD_PAYLOAD)
         assert resp.json()["status"] == "duplicate"
         run.assert_not_called()

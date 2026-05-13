@@ -6,7 +6,7 @@ import pytest_asyncio
 @pytest_asyncio.fixture
 async def schema():
     """in-memory sqlite 에 metadata.create_all 을 적용한다."""
-    from gateway.db.session import init_schema
+    from gateway.infrastructure.db.session import init_schema
 
     await init_schema()
     yield

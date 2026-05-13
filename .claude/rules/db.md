@@ -2,18 +2,18 @@
 
 코드 읽어도 안 보이고, 안 지키면 런타임에 터지는 DB 레이어 규칙.
 
-## 1. Store 호출은 항상 `await`
+## 1. Repository 호출은 항상 `await`
 
-`gateway.store.IncidentStore` 의 모든 메서드는 async. 동기 호출 금지 — 이벤트 루프 점유로 1초 룰 위반.
+`gateway.infrastructure.db.repository.IncidentRepository` 의 모든 메서드는 async. 동기 호출 금지 — 이벤트 루프 점유로 1초 룰 위반.
 
 ```python
 # ❌ NO
-store.add(event)
-entry = store.get(incident_id)
+repo.add(event)
+entry = repo.get(incident_id)
 
 # ✅ YES
-await store.add(event)
-entry = await store.get(incident_id)
+await repo.add(event)
+entry = await repo.get(incident_id)
 ```
 
 ## 2. async session 에서 relationship 직접 접근 금지
@@ -41,7 +41,7 @@ async with factory() as s:
 | SQLite (`sqlite+aiosqlite://...`) | ✅ `lifespan` / `demo.py` 가 `init_schema()` 호출 | dev/test 편의 |
 | MySQL (`mysql+asyncmy://...`) | ❌ 자동 안 함 | **반드시 `uv run alembic upgrade head` 선행** |
 
-분기는 `gateway.db.session.is_sqlite_backend()` 한 곳. 새 DB 코드 추가 시 우회하지 말 것.
+분기는 `gateway.infrastructure.db.session.is_sqlite_backend()` 한 곳. 새 DB 코드 추가 시 우회하지 말 것.
 
 ## 4. 스키마 변경 = Alembic revision
 
