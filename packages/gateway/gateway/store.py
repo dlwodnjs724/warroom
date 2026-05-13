@@ -1,238 +1,160 @@
-"""인시던트 스토어.
+"""인시던트 영속화 — Async SQLAlchemy 2.0.
 
-환경변수:
-    WARROOM_STORE     memory | sqlite       (기본: sqlite)
-    WARROOM_DB_PATH   sqlite 파일 경로      (기본: ./data/warroom.db)
-
-memory 백엔드는 프로세스 라이프사이클과 함께 사라지며, sqlite 백엔드는
-재시작·다중 클라이언트(`demo.py` ↔ `serve.py`) 간 인시던트 상태를 공유한다.
-테스트는 `WARROOM_DB_PATH=:memory:` 로 격리할 수 있다.
+백엔드는 DATABASE_URL 환경변수로 결정 (sqlite vs mysql). 자세한 정책은
+docs/plan.md 의 환경 매트릭스 참조.
 """
-import os
-import sqlite3
-from pathlib import Path
-from threading import Lock
-from typing import Protocol, runtime_checkable
+from datetime import datetime
 
-from common.models import IncidentCategory, IncidentEvent, IncidentStatus, ResolutionReport
+from sqlalchemy import select
+
+from common.models import IncidentEvent, IncidentStatus, ResolutionReport
+from gateway.db.models import Incident, Report
+from gateway.db.session import get_session_factory
 
 
-@runtime_checkable
-class IncidentStore(Protocol):
-    def add(self, event: IncidentEvent) -> None: ...
-    def update_status(
+class IncidentStore:
+    async def add(self, event: IncidentEvent) -> None:
+        """incident 를 새로 등록한다. 동일 ID 가 있으면 report 까지 초기화한다."""
+        sf = get_session_factory()
+        async with sf() as s:
+            existing = await s.get(Incident, event.incident_id)
+            if existing:
+                existing_report = await s.get(Report, event.incident_id)
+                if existing_report is not None:
+                    await s.delete(existing_report)
+                existing.source = event.source
+                existing.title = event.title
+                existing.status = IncidentStatus.PENDING.value
+                existing.dupe_count = 1
+            else:
+                s.add(
+                    Incident(
+                        incident_id=event.incident_id,
+                        source=event.source,
+                        title=event.title,
+                        status=IncidentStatus.PENDING.value,
+                        dupe_count=1,
+                    )
+                )
+            await s.commit()
+
+    async def increment_dupe_count(self, incident_id: str) -> int:
+        sf = get_session_factory()
+        async with sf() as s:
+            incident = await s.get(Incident, incident_id)
+            if not incident:
+                return 0
+            incident.dupe_count += 1
+            count = incident.dupe_count
+            await s.commit()
+            return count
+
+    async def update_status(
         self,
         incident_id: str,
         status: IncidentStatus,
         is_approved: bool | None = None,
-    ) -> None: ...
-    def save_report(self, incident_id: str, report: ResolutionReport) -> None: ...
-    def get(self, incident_id: str) -> dict | None: ...
-    def list_all(self) -> list[dict]: ...
-    def increment_dupe_count(self, incident_id: str) -> int: ...
-
-
-class InMemoryIncidentStore:
-    def __init__(self):
-        self._store: dict[str, dict] = {}
-
-    def add(self, event: IncidentEvent) -> None:
-        self._store[event.incident_id] = {
-            "incident_id": event.incident_id,
-            "source": event.source,
-            "title": event.title,
-            "status": IncidentStatus.PENDING,
-            "report": None,
-            "dupe_count": 1,
-        }
-
-    def update_status(self, incident_id, status, is_approved=None):
-        if incident_id in self._store:
-            self._store[incident_id]["status"] = status
-            if is_approved is not None and self._store[incident_id]["report"]:
-                self._store[incident_id]["report"]["is_approved"] = is_approved
-
-    def save_report(self, incident_id, report):
-        if incident_id in self._store:
-            self._store[incident_id]["report"] = {
-                "severity": report.severity.value,
-                "category": report.category.value,
-                "triage_summary": report.triage_summary,
-                "root_cause": report.root_cause,
-                "patch_suggestion": report.patch_suggestion,
-                "post_mortem_draft": report.post_mortem_draft,
-                "is_approved": report.is_approved,
-                "created_at": report.created_at.isoformat(),
-            }
-
-    def get(self, incident_id):
-        return self._store.get(incident_id)
-
-    def list_all(self):
-        return list(self._store.values())
-
-    def increment_dupe_count(self, incident_id: str) -> int:
-        if incident_id not in self._store:
-            return 0
-        self._store[incident_id]["dupe_count"] = self._store[incident_id].get("dupe_count", 1) + 1
-        return self._store[incident_id]["dupe_count"]
-
-
-class SqliteIncidentStore:
-    _SCHEMA = """
-    CREATE TABLE IF NOT EXISTS incidents (
-        incident_id TEXT PRIMARY KEY,
-        source      TEXT NOT NULL,
-        title       TEXT NOT NULL,
-        status      TEXT NOT NULL,
-        dupe_count  INTEGER NOT NULL DEFAULT 1
-    );
-    CREATE TABLE IF NOT EXISTS reports (
-        incident_id       TEXT PRIMARY KEY REFERENCES incidents(incident_id),
-        severity          TEXT NOT NULL,
-        category          TEXT NOT NULL DEFAULT 'code',
-        triage_summary    TEXT,
-        root_cause        TEXT,
-        patch_suggestion  TEXT,
-        post_mortem_draft TEXT,
-        is_approved       INTEGER,
-        created_at        TEXT NOT NULL
-    );
-    """
-
-    def __init__(self, db_path: str = ":memory:"):
-        self._db_path = db_path
-        self._lock = Lock()
-        if db_path != ":memory:":
-            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(self._SCHEMA)
-        self._migrate()
-        self._conn.commit()
-
-    def _migrate(self) -> None:
-        # ALTER TABLE ADD COLUMN 은 멱등이 아니므로 PRAGMA 로 존재 여부 확인
-        incident_cols = {row["name"] for row in self._conn.execute("PRAGMA table_info(incidents)")}
-        if "dupe_count" not in incident_cols:
-            self._conn.execute(
-                "ALTER TABLE incidents ADD COLUMN dupe_count INTEGER NOT NULL DEFAULT 1"
-            )
-        report_cols = {row["name"] for row in self._conn.execute("PRAGMA table_info(reports)")}
-        if "category" not in report_cols:
-            self._conn.execute(
-                "ALTER TABLE reports ADD COLUMN category TEXT NOT NULL DEFAULT 'code'"
-            )
-
-    def add(self, event: IncidentEvent) -> None:
-        with self._lock:
-            self._conn.execute(
-                "INSERT OR REPLACE INTO incidents (incident_id, source, title, status, dupe_count) "
-                "VALUES (?, ?, ?, ?, 1)",
-                (event.incident_id, event.source, event.title, IncidentStatus.PENDING.value),
-            )
-            self._conn.execute(
-                "DELETE FROM reports WHERE incident_id = ?",
-                (event.incident_id,),
-            )
-            self._conn.commit()
-
-    def update_status(self, incident_id, status, is_approved=None):
-        status_value = status.value if hasattr(status, "value") else status
-        with self._lock:
-            self._conn.execute(
-                "UPDATE incidents SET status = ? WHERE incident_id = ?",
-                (status_value, incident_id),
-            )
+    ) -> None:
+        sf = get_session_factory()
+        async with sf() as s:
+            incident = await s.get(Incident, incident_id)
+            if not incident:
+                return
+            incident.status = status.value if hasattr(status, "value") else status
             if is_approved is not None:
-                self._conn.execute(
-                    "UPDATE reports SET is_approved = ? WHERE incident_id = ?",
-                    (1 if is_approved else 0, incident_id),
+                report = await s.get(Report, incident_id)
+                if report:
+                    report.is_approved = is_approved
+            await s.commit()
+
+    async def save_report(self, incident_id: str, report: ResolutionReport) -> None:
+        sf = get_session_factory()
+        async with sf() as s:
+            existing = await s.get(Report, incident_id)
+            if existing:
+                existing.severity = report.severity.value
+                existing.category = report.category.value
+                existing.triage_summary = report.triage_summary
+                existing.root_cause = report.root_cause
+                existing.patch_suggestion = report.patch_suggestion
+                existing.post_mortem_draft = report.post_mortem_draft
+                existing.is_approved = report.is_approved
+                existing.created_at = report.created_at
+            else:
+                s.add(
+                    Report(
+                        incident_id=incident_id,
+                        severity=report.severity.value,
+                        category=report.category.value,
+                        triage_summary=report.triage_summary,
+                        root_cause=report.root_cause,
+                        patch_suggestion=report.patch_suggestion,
+                        post_mortem_draft=report.post_mortem_draft,
+                        is_approved=report.is_approved,
+                        created_at=report.created_at,
+                    )
                 )
-            self._conn.commit()
+            await s.commit()
 
-    def save_report(self, incident_id, report: ResolutionReport):
-        with self._lock:
-            self._conn.execute(
-                """INSERT OR REPLACE INTO reports
-                   (incident_id, severity, category, triage_summary, root_cause,
-                    patch_suggestion, post_mortem_draft, is_approved, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    incident_id,
-                    report.severity.value,
-                    report.category.value,
-                    report.triage_summary,
-                    report.root_cause,
-                    report.patch_suggestion,
-                    report.post_mortem_draft,
-                    None if report.is_approved is None else int(report.is_approved),
-                    report.created_at.isoformat(),
-                ),
-            )
-            self._conn.commit()
+    async def get(self, incident_id: str) -> dict | None:
+        sf = get_session_factory()
+        async with sf() as s:
+            incident = await s.get(Incident, incident_id)
+            if not incident:
+                return None
+            report = await s.get(Report, incident_id)
+            return _incident_to_dict(incident, report)
 
-    def get(self, incident_id: str) -> dict | None:
-        row = self._conn.execute(
-            "SELECT incident_id, source, title, status, dupe_count FROM incidents WHERE incident_id = ?",
-            (incident_id,),
-        ).fetchone()
-        if not row:
-            return None
-        result = {
-            "incident_id": row["incident_id"],
-            "source": row["source"],
-            "title": row["title"],
-            "status": IncidentStatus(row["status"]),
-            "dupe_count": row["dupe_count"],
-            "report": None,
-        }
-        rep = self._conn.execute(
-            """SELECT severity, category, triage_summary, root_cause, patch_suggestion,
-                      post_mortem_draft, is_approved, created_at
-               FROM reports WHERE incident_id = ?""",
-            (incident_id,),
-        ).fetchone()
-        if rep:
-            result["report"] = {
-                "severity": rep["severity"],
-                "category": rep["category"],
-                "triage_summary": rep["triage_summary"],
-                "root_cause": rep["root_cause"],
-                "patch_suggestion": rep["patch_suggestion"],
-                "post_mortem_draft": rep["post_mortem_draft"],
-                "is_approved": None if rep["is_approved"] is None else bool(rep["is_approved"]),
-                "created_at": rep["created_at"],
-            }
-        return result
-
-    def list_all(self) -> list[dict]:
-        ids = [r["incident_id"] for r in self._conn.execute(
-            "SELECT incident_id FROM incidents ORDER BY incident_id"
-        ).fetchall()]
-        return [self.get(i) for i in ids if self.get(i) is not None]
-
-    def increment_dupe_count(self, incident_id: str) -> int:
-        with self._lock:
-            cur = self._conn.execute(
-                "UPDATE incidents SET dupe_count = dupe_count + 1 "
-                "WHERE incident_id = ? RETURNING dupe_count",
-                (incident_id,),
-            )
-            row = cur.fetchone()
-            self._conn.commit()
-            return row["dupe_count"] if row else 0
+    async def list_all(self) -> list[dict]:
+        sf = get_session_factory()
+        async with sf() as s:
+            rows = (await s.execute(select(Incident).order_by(Incident.incident_id))).scalars().all()
+            output: list[dict] = []
+            for incident in rows:
+                report = await s.get(Report, incident.incident_id)
+                output.append(_incident_to_dict(incident, report))
+            return output
 
 
-def _build_default_store() -> IncidentStore:
-    backend = os.getenv("WARROOM_STORE", "sqlite").lower()
-    if backend == "memory":
-        return InMemoryIncidentStore()
-    if backend == "sqlite":
-        return SqliteIncidentStore(os.getenv("WARROOM_DB_PATH", "./data/warroom.db"))
-    raise ValueError(
-        f"지원하지 않는 WARROOM_STORE: {backend!r}. 사용 가능: memory, sqlite"
-    )
+def _incident_to_dict(incident: Incident, report: Report | None) -> dict:
+    return {
+        "incident_id": incident.incident_id,
+        "source": incident.source,
+        "title": incident.title,
+        "status": IncidentStatus(incident.status),
+        "dupe_count": incident.dupe_count,
+        "report": _report_to_dict(report) if report else None,
+    }
 
 
-incident_store: IncidentStore = _build_default_store()
+def _report_to_dict(report: Report) -> dict:
+    return {
+        "severity": report.severity,
+        "category": report.category,
+        "triage_summary": report.triage_summary,
+        "root_cause": report.root_cause,
+        "patch_suggestion": report.patch_suggestion,
+        "post_mortem_draft": report.post_mortem_draft,
+        "is_approved": report.is_approved,
+        "created_at": (
+            report.created_at.isoformat()
+            if isinstance(report.created_at, datetime)
+            else report.created_at
+        ),
+    }
+
+
+_store: IncidentStore | None = None
+
+
+def get_store() -> IncidentStore:
+    global _store
+    if _store is None:
+        _store = IncidentStore()
+    return _store
+
+
+def reset_store() -> None:
+    """테스트 격리용 — 캐시된 store 객체를 폐기한다."""
+    global _store
+    _store = None

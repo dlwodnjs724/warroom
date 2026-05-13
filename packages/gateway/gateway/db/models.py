@@ -1,0 +1,49 @@
+"""SQLAlchemy 2.0 모델.
+
+스키마는 운영 대상이 MySQL 임을 가정해 VARCHAR 길이를 명시한다.
+변동 길이 본문(triage_summary, patch 등)은 Text 로 둔다.
+"""
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Incident(Base):
+    __tablename__ = "incidents"
+
+    incident_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    source: Mapped[str] = mapped_column(String(50), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    status: Mapped[str] = mapped_column(String(50), nullable=False)
+    dupe_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+    report: Mapped["Report | None"] = relationship(
+        back_populates="incident",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+
+class Report(Base):
+    __tablename__ = "reports"
+
+    incident_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("incidents.incident_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    severity: Mapped[str] = mapped_column(String(20), nullable=False)
+    category: Mapped[str] = mapped_column(String(20), nullable=False, default="code")
+    triage_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    root_cause: Mapped[str | None] = mapped_column(Text, nullable=True)
+    patch_suggestion: Mapped[str | None] = mapped_column(Text, nullable=True)
+    post_mortem_draft: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_approved: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    incident: Mapped[Incident] = relationship(back_populates="report")

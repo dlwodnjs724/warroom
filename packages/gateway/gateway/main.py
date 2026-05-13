@@ -8,9 +8,11 @@ Event Gateway — FastAPI webhook receiver.
   POST /incidents/{id}/approve  패치 제안 승인
   POST /incidents/{id}/reject   패치 제안 반려
 """
+import asyncio
 import json
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Any
 
 from dotenv import load_dotenv
@@ -19,34 +21,37 @@ from fastapi.responses import JSONResponse
 
 load_dotenv()
 
-from datetime import datetime
-
 from common.models import IncidentCategory, IncidentEvent, IncidentStatus, ResolutionReport, Severity
 from gateway.parsers import datadog as datadog_parser
 from gateway.parsers import sentry as sentry_parser
+from gateway.db.session import init_schema
 from gateway.security import verify_datadog_token, verify_sentry_signature, warn_if_secrets_missing
-from gateway.store import incident_store
+from gateway.store import get_store
 
-# orchestrator는 import 지연 (LLM 초기화 비용)
-def _run_pipeline(event: IncidentEvent) -> None:
+
+async def _run_pipeline(event: IncidentEvent) -> None:
+    # orchestrator는 import 지연 (LLM 초기화 비용)
     from chatops.factory import make_notifier
     from orchestrator.runner import run_pipeline
 
+    store = get_store()
     notifier = make_notifier()
     try:
-        incident_store.update_status(event.incident_id, IncidentStatus.ANALYZING)
-        report = run_pipeline(event, notifier)
-        incident_store.save_report(event.incident_id, report)
-        incident_store.update_status(event.incident_id, IncidentStatus.AWAITING_APPROVAL)
+        await store.update_status(event.incident_id, IncidentStatus.ANALYZING)
+        report = await asyncio.to_thread(run_pipeline, event, notifier)
+        await store.save_report(event.incident_id, report)
+        await store.update_status(event.incident_id, IncidentStatus.AWAITING_APPROVAL)
     except Exception as e:
         print(f"[ERROR] 파이프라인 실패 ({event.incident_id}): {e}")
-        incident_store.update_status(event.incident_id, IncidentStatus.FAILED)
+        await store.update_status(event.incident_id, IncidentStatus.FAILED)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("[WARROOM] Gateway 시작")
     warn_if_secrets_missing()
+    # Alembic 안 돌렸을 때 dev 편의용 자동 스키마 생성. 운영은 alembic upgrade 사용 권장.
+    await init_schema()
     yield
     print("[WARROOM] Gateway 종료")
 
@@ -65,7 +70,7 @@ async def webhook_sentry(
     if not verify_sentry_signature(body, x_sentry_signature):
         raise HTTPException(status_code=401, detail="Invalid Sentry signature")
     payload = json.loads(body)
-    return _ingest(sentry_parser.parse(payload), background_tasks)
+    return await _ingest(sentry_parser.parse(payload), background_tasks)
 
 
 @app.post("/webhook/datadog", status_code=202)
@@ -77,21 +82,22 @@ async def webhook_datadog(
     """Datadog 웹훅 수신 — Monitor/Incident 페이로드 모두 처리."""
     if not verify_datadog_token(x_warroom_token):
         raise HTTPException(status_code=401, detail="Invalid Datadog token")
-    return _ingest(datadog_parser.parse(payload), background_tasks)
+    return await _ingest(datadog_parser.parse(payload), background_tasks)
 
 
-def _ingest(event: IncidentEvent, background_tasks: BackgroundTasks) -> dict:
+async def _ingest(event: IncidentEvent, background_tasks: BackgroundTasks) -> dict:
     """파싱된 IncidentEvent 를 dedupe 처리 후 파이프라인에 흘려보낸다."""
-    existing = incident_store.get(event.incident_id)
+    store = get_store()
+    existing = await store.get(event.incident_id)
     if existing:
-        count = incident_store.increment_dupe_count(event.incident_id)
+        count = await store.increment_dupe_count(event.incident_id)
         print(f"[WARROOM] 중복 수신 — {event.incident_id} (총 {count}건). 기존 파이프라인 유지.")
         return {
             "incident_id": event.incident_id,
             "status": "duplicate",
             "dupe_count": count,
         }
-    incident_store.add(event)
+    await store.add(event)
     background_tasks.add_task(_run_pipeline, event)
     return {"incident_id": event.incident_id, "status": "accepted"}
 
@@ -99,12 +105,12 @@ def _ingest(event: IncidentEvent, background_tasks: BackgroundTasks) -> dict:
 @app.get("/incidents")
 async def list_incidents():
     """처리된 인시던트 목록 조회."""
-    return incident_store.list_all()
+    return await get_store().list_all()
 
 
 @app.get("/incidents/{incident_id}")
 async def get_incident(incident_id: str):
-    entry = incident_store.get(incident_id)
+    entry = await get_store().get(incident_id)
     if not entry:
         raise HTTPException(status_code=404, detail="인시던트를 찾을 수 없습니다.")
     return entry
@@ -113,17 +119,18 @@ async def get_incident(incident_id: str):
 @app.post("/incidents/{incident_id}/approve")
 async def approve_incident(incident_id: str):
     """패치 제안 승인 (Human-in-the-Loop)."""
-    return _handle_decision(incident_id, approved=True)
+    return await _handle_decision(incident_id, approved=True)
 
 
 @app.post("/incidents/{incident_id}/reject")
 async def reject_incident(incident_id: str):
     """패치 제안 반려 (Human-in-the-Loop)."""
-    return _handle_decision(incident_id, approved=False)
+    return await _handle_decision(incident_id, approved=False)
 
 
-def _handle_decision(incident_id: str, approved: bool) -> JSONResponse:
-    entry = incident_store.get(incident_id)
+async def _handle_decision(incident_id: str, approved: bool) -> JSONResponse:
+    store = get_store()
+    entry = await store.get(incident_id)
     if not entry:
         raise HTTPException(status_code=404, detail="인시던트를 찾을 수 없습니다.")
     if entry["status"] != IncidentStatus.AWAITING_APPROVAL:
@@ -133,7 +140,7 @@ def _handle_decision(incident_id: str, approved: bool) -> JSONResponse:
         )
 
     status = IncidentStatus.APPROVED if approved else IncidentStatus.REJECTED
-    incident_store.update_status(incident_id, status, is_approved=approved)
+    await store.update_status(incident_id, status, is_approved=approved)
 
     action = "승인" if approved else "반려"
     print(f"[WARROOM] 인시던트 {incident_id} {action} 처리 완료")
@@ -170,6 +177,9 @@ def _open_pr(entry: dict) -> dict | None:
 
     from github.factory import make_github_client
 
+    created_at = report_dict["created_at"]
+    if isinstance(created_at, str):
+        created_at = datetime.fromisoformat(created_at)
     report = ResolutionReport(
         incident_id=entry["incident_id"],
         severity=Severity(report_dict["severity"]),
@@ -179,7 +189,7 @@ def _open_pr(entry: dict) -> dict | None:
         patch_suggestion=report_dict["patch_suggestion"] or "",
         post_mortem_draft=report_dict["post_mortem_draft"] or "",
         is_approved=True,
-        created_at=datetime.fromisoformat(report_dict["created_at"]),
+        created_at=created_at,
     )
     client = make_github_client()
     result = client.create_patch_pr(report, repo=repo)

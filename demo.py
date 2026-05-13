@@ -9,12 +9,15 @@ warroom 프로토타입 실행 진입점.
     GEMINI_API_KEY       provider=gemini 일 때 필수
     ANTHROPIC_API_KEY    provider=anthropic 일 때 필수
     MOCK_PIPELINE        true 이면 LLM 호출 없이 mock 응답 사용
+    DATABASE_URL         dev/prod=MySQL, test=in-memory SQLite (기본: 로컬 sqlite 파일)
 """
+import asyncio
 import json
 import os
 import sys
 from datetime import datetime
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -36,14 +39,14 @@ if not _USE_MOCK:
     print(f"  Analyst: {_models['analyst']}")
     print(f"  Fixer  : {_models['fixer']}")
 
-from common.models import IncidentStatus
-from gateway.parsers import sentry as sentry_parser
-from gateway.store import incident_store
-from orchestrator.runner import run_pipeline
 from chatops.factory import make_notifier
+from common.models import IncidentStatus
+from gateway.db.session import init_schema
+from gateway.parsers import sentry as sentry_parser
+from gateway.store import get_store
+from orchestrator.runner import run_pipeline
 
 
-# Mock Sentry webhook 페이로드
 MOCK_SENTRY_PAYLOAD = {
     "data": {
         "issue": {
@@ -67,6 +70,7 @@ def save_report_json(report) -> Path:
     data = {
         "incident_id": report.incident_id,
         "severity": report.severity.value,
+        "category": report.category.value,
         "triage_summary": report.triage_summary,
         "root_cause": report.root_cause,
         "patch_suggestion": report.patch_suggestion,
@@ -78,13 +82,13 @@ def save_report_json(report) -> Path:
     return report_path
 
 
-def human_approval(report) -> bool:
+def human_approval() -> bool:
     """Human-in-the-Loop: 개발자 승인/반려."""
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("  패치 제안을 승인하시겠습니까?")
     print("  [y] 승인 — 포스트모템 저장")
     print("  [n] 반려 — 재검토 필요 표시")
-    print("="*60)
+    print("=" * 60)
 
     while True:
         answer = input("  선택 (y/n): ").strip().lower()
@@ -95,7 +99,9 @@ def human_approval(report) -> bool:
         print("  y 또는 n 을 입력하세요.")
 
 
-def main():
+async def main():
+    await init_schema()  # 로컬 dev 편의 — alembic 안 쓸 때 스키마 자동 생성
+    store = get_store()
     notifier = make_notifier()
 
     print("\n[WARROOM] 프로토타입 시작")
@@ -103,25 +109,25 @@ def main():
 
     # 1. 파싱
     event = sentry_parser.parse(MOCK_SENTRY_PAYLOAD)
-    incident_store.add(event)
+    await store.add(event)
     notifier.on_incident_received(event)
 
-    # 2. 에이전트 파이프라인
+    # 2. 에이전트 파이프라인 (sync) — to_thread 로 이벤트 루프 비점유
     try:
-        incident_store.update_status(event.incident_id, IncidentStatus.ANALYZING)
-        report = run_pipeline(event, notifier)
-        incident_store.save_report(event.incident_id, report)
-        incident_store.update_status(event.incident_id, IncidentStatus.AWAITING_APPROVAL)
+        await store.update_status(event.incident_id, IncidentStatus.ANALYZING)
+        report = await asyncio.to_thread(run_pipeline, event, notifier)
+        await store.save_report(event.incident_id, report)
+        await store.update_status(event.incident_id, IncidentStatus.AWAITING_APPROVAL)
     except Exception as e:
-        incident_store.update_status(event.incident_id, IncidentStatus.FAILED)
+        await store.update_status(event.incident_id, IncidentStatus.FAILED)
         print(f"\n[오류] 파이프라인 실행 실패: {e}")
         sys.exit(1)
 
     # 3. Human-in-the-Loop
-    approved = human_approval(report)
+    approved = human_approval()
     report.is_approved = approved
     final_status = IncidentStatus.APPROVED if approved else IncidentStatus.REJECTED
-    incident_store.update_status(event.incident_id, final_status, is_approved=approved)
+    await store.update_status(event.incident_id, final_status, is_approved=approved)
 
     # 4. JSON 산출물 (가독용 보조 출력)
     path = save_report_json(report)
@@ -149,4 +155,4 @@ def _open_github_pr(report) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

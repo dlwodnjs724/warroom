@@ -8,6 +8,10 @@ dependencies = [
     "uvicorn",
     "python-dotenv",
     "warroom-common",
+    "sqlalchemy[asyncio]>=2.0",
+    "aiosqlite>=0.20",
+    "asyncmy>=0.2",
+    "alembic>=1.18.4",
 ]
 
 [tool.uv.sources]
