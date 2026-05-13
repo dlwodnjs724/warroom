@@ -5,6 +5,7 @@ from datetime import datetime
 import pytest
 
 from chatops.slack import SlackNotifier, _truncate
+from common.clock import APP_TZ
 from common.models import IncidentEvent, ResolutionReport, Severity
 
 
@@ -27,7 +28,7 @@ def report():
         root_cause="charge() 메서드에서 _ensure_client() 호출 누락",
         patch_suggestion="def charge(self, ...):\n    self._ensure_client()\n    ...",
         post_mortem_draft="단/중/장기 액션 매트릭스",
-        created_at=datetime(2026, 5, 7, 10, 0, 0),
+        created_at=datetime(2026, 5, 7, 10, 0, 0, tzinfo=APP_TZ),
     )
 
 

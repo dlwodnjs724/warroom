@@ -7,6 +7,7 @@ from datetime import datetime
 
 import pytest
 
+from common.clock import APP_TZ
 from common.models import (
     IncidentCategory,
     IncidentEvent,
@@ -37,7 +38,7 @@ def report():
         root_cause="charge() 누락",
         patch_suggestion="...",
         post_mortem_draft="...",
-        created_at=datetime(2026, 5, 7, 10, 0, 0),
+        created_at=datetime(2026, 5, 7, 10, 0, 0, tzinfo=APP_TZ),
     )
 
 

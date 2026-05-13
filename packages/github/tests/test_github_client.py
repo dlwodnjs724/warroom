@@ -9,6 +9,7 @@ from datetime import datetime
 
 import pytest
 
+from common.clock import APP_TZ
 from common.models import ResolutionReport, Severity
 from github.app import GitHubAppClient
 from github.dry_run import DryRunGitHubClient
@@ -25,7 +26,7 @@ def report():
         patch_suggestion="if customer is None: raise ...",
         post_mortem_draft="단/중/장기 액션",
         is_approved=True,
-        created_at=datetime(2026, 5, 12, 9, 0, 0),
+        created_at=datetime(2026, 5, 12, 9, 0, 0, tzinfo=APP_TZ),
     )
 
 
