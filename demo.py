@@ -15,7 +15,7 @@ import asyncio
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -66,7 +66,7 @@ def save_report_json(report) -> Path:
     output_dir = Path("output")
     output_dir.mkdir(exist_ok=True)
 
-    report_path = output_dir / f"{report.incident_id}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+    report_path = output_dir / f"{report.incident_id}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
     data = {
         "incident_id": report.incident_id,
         "severity": report.severity.value,

@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -34,7 +34,7 @@ class IncidentEvent:
     source: str                  # "sentry", "datadog", ...
     title: str
     raw_payload: dict[str, Any]
-    received_at: datetime = field(default_factory=datetime.utcnow)
+    received_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     severity: Severity | None = None
     status: IncidentStatus = IncidentStatus.PENDING
 
@@ -49,4 +49,4 @@ class ResolutionReport:
     post_mortem_draft: str
     category: IncidentCategory = IncidentCategory.CODE
     is_approved: bool | None = None   # None = 미결정
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
