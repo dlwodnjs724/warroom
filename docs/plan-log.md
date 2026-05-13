@@ -13,3 +13,4 @@
 | 2026-05-13 | Phase 0 (0.1 Slack / 0.2 Sentry / 0.2b ngrok / 0.3 GitHub App) 완료. Sentry 실 webhook E2E 검증 중 `Sentry-Hook-Signature` 헤더 버그 발견·수정 (`ecb1182`) |
 | 2026-05-14 | Phase 2 (Slack 가시성) 완료 — 6 commits (`c2feda2`~`0b6fb39`) + fix (`4000cfa`). 실 LLM + mock 양쪽 E2E 캡처 확보. 발견 잔무: Slack section truncation (2.8, patch=3044 / RCA=4146 실측), 실 LLM agent 단위 thread emit 누락 (2.9). 우선순위 재조정: 다음 주 Phase 4 (실 코드 변경 PR — unified diff prompt + git apply) 가 Phase 3 보다 1순위 |
 | 2026-05-14 | 갱신 로그를 plan.md → plan-log.md 로 분리 (plan.md 컨텍스트 비용 절감) |
+| 2026-05-14 | gateway 패키지 layered 정리 — api/services/infrastructure 3-layer. `IncidentStore`→`IncidentRepository`. `parsers`→`monitors`. `.claude/rules/architecture.md` 신설 (import 방향 + naming 룰). Phase 6 신설 (logger / orchestrator 실 API tool) |

@@ -253,6 +253,13 @@ Phase 2 진입 전 long-term maintainability 정리.
 - **5.6** 통합 테스트 1개 — webhook → /approve → PR dry-run 까지 end-to-end
 - **5.7** GitHub Actions CI — pytest + ruff + pre-commit run
 
+### Phase 6 — 코드 품질 / 운영성 정리 (multi-agent 도입 전 정리)
+
+다음 작업들은 데모 임팩트는 없지만 **이후 multi-agent / agent team 작업 진입 전에 정돈해두면 ROI 큰** 항목들. cold-context agent 가 안정적으로 작업하려면 룰 + 일관성이 잡혀 있어야 함.
+
+- **6.1** `print` → `logging` 마이그레이션 — 전 패키지. structured (JSON for prod) vs human (dev) 분기. log level env 제어. 영향 범위: gateway/main, services/*, infrastructure/*, chatops/slack, github/app
+- **6.2** orchestrator Sentry/GitHub tool 을 실 API 호출로 교체 — `orchestrator/tools/sentry.py` 가 현재 mock 데이터 하드코딩. Analyst agent 의 분석 품질에 직접 영향. **Phase 4 와 시너지** (실 코드 변경 + 실 Sentry 데이터 = 진짜 분석)
+
 ---
 
 ## 5. 의존 그래프
@@ -266,6 +273,7 @@ flowchart LR
     P1 -.시너지.-> P4
     P3 --> P5[Phase 5 문서/시연]
     P4 --> P5
+    P6[Phase 6 품질/운영성] -.병렬.-> P4
 ```
 
 ---
