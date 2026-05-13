@@ -201,15 +201,22 @@ Phase 2 진입 전 long-term maintainability 정리.
 - **1.7.7** ✅ docs/decisions.md stale 갱신 (메모리/JSON → SQLAlchemy, 200→202)
 - **1.7.8** ✅ `DateTime(timezone=True)` end-to-end — Alembic revision `6afb061f570b`, MySQL 서버/세션 `--default-time-zone=+00:00`, `?init_command=SET%20time_zone%3D...`
 
-### Phase 2 — Slack 가시성 (3~4시간) ★ Phase 0.1 선행 필요
+### Phase 2 — Slack 가시성 (완료)
 
-- **2.1** `SlackNotifier` 를 `chat.postMessage` 기반으로 재작성
-- **2.2** 에이전트 진행은 thread reply
-- **2.3** 최종 결과는 메인 메시지 `chat.update`
-- **2.4** thread_ts 영속화 (store schema) — 컬럼 추가용 마이그레이션 함수 1개 추가 (`ALTER TABLE` idempotent), 또는 dev 한정 "DB 재생성" 정책 명시
-- **2.5** dry-run / 테스트 호환 유지
-- **2.6** `Notifier.on_pipeline_failed(event, error)` 추가 — LLM/외부 API 실패 시 Slack 에 "분석 실패" 알림 (메인 메시지 update)
-- **2.7** Slack 메시지 size 한계 (40k) — `_truncate` 를 모든 long-text 필드(stack trace, patch, RCA) 에 적용
+- **2.1** ✅ `SlackNotifier` 를 `chat.postMessage` 기반으로 재작성 (Bot Token + Web API)
+- **2.2** ✅ 에이전트 진행은 thread reply (`thread_ts` 재사용)
+- **2.3** ✅ 최종 결과는 메인 메시지 `chat.update`
+- **2.4** ✅ thread_ts 영속화 — `incidents.slack_channel_id` / `slack_ts` 컬럼 + Alembic revision `7efa9d16ece4`
+- **2.5** ✅ dry-run (SLACK_BOT_TOKEN 미설정) / 테스트 호환 유지 — 15 unit tests
+- **2.6** ✅ `Notifier.on_pipeline_failed(incident_id, error)` 추가
+- **2.7** ✅ `_truncate` 를 RCA/patch 에 적용 (section 한도 3000 의 안전버퍼 2500)
+- **2.8** ⚠️ **잔무**: 실 LLM patch 가 거의 항상 한도 초과 (실측 patch=3044, RCA=4146). 채널 본문엔 요약+버튼, thread 에 풀텍스트 reply 로 split 필요. DB/PR body 는 풀텍스트 유지 중 (Slack 표시만 잘림 — 데이터 손실 없음)
+- **2.9** ⚠️ **잔무**: 실 LLM 경로 (`_run_crew_pipeline`) 에 agent 단위 thread reply emit 누락 — `Crew.kickoff()` 사이에 `notifier.on_agent_update` 수동 호출하거나 CrewAI step callback 사용
+- **부수 fix**:
+  - `on_incident_received` 가 gateway 에서 한 번도 호출되지 않던 pre-existing 버그 (`4000cfa`)
+  - Alembic env.py `%` 인용부호 configparser interpolation ValueError (`26b7d9d`)
+  - 드라이버 표기 inconsistency (`aiomysql` → `asyncmy`, `c2feda2`)
+  - 테스트 env 누수 차단 강화 (Slack/GitHub vars, `0b6fb39`)
 
 ### Phase 3 — Slack Interactivity (2~3시간)
 
@@ -220,15 +227,21 @@ Phase 2 진입 전 long-term maintainability 정리.
 - **3.5** 사유를 store 저장 + 재분석 시 컨텍스트 주입
 - **3.6** 테스트
 
-### Phase 4 — 실 코드 변경 PR (5~7시간, 위험)
+### Phase 4 — 실 코드 변경 PR (5~7시간, 위험) ★ 다음 주 1순위
+
+**현재 한계**: PR 에 `incidents/<id>.md` (markdown 리포트) 만 추가. 실제 소스파일 변경 없음 → 리뷰어가 진짜 코드리뷰 불가. AI Agent 시연의 핵심 가치 (실 코드 PR) 가 미달성.
+
+**목표**: Fixer 출력을 실제 파일 diff 로 변환 → PR 에 진짜 코드 변경 노출 → 리뷰어가 GitHub UI 에서 line-by-line review 가능.
 
 - **4.0** **Mock → Real tool**: `orchestrator/tools/{sentry,github}.py` 의 mock 함수를 실제 API 호출로 교체. Fixer 가 _어느 파일_ 을 수정할지 알려면 GitHub source lookup 이 실제로 작동해야 함 (전제 조건)
-- **4.1** Fixer 프롬프트: `{files: [{path, content}]}` JSON 강제
-- **4.2** 출력 파싱 + 검증 (실패 시 fallback: 분석 리포트만)
-- **4.3** 다중 파일 PUT contents, 기존 파일 sha 처리
-- **4.4** 거절 시 PR close + branch 삭제
-- **4.5** Hybrid: 코드 변경 + 분석 리포트 둘 다 첨부
-- **4.6** Patch 내용 redaction — LLM 출력에 환경변수/secret 형태 토큰(`sk-`, `AKIA`, `ghp_` 등) 있으면 PR 본문에 `[REDACTED]` 치환
+- **4.1** Fixer 프롬프트 강제 — 출력은 **unified diff (`git apply` 가능 형식)**. system prompt 에 명시 + few-shot example
+- **4.2** 출력 파싱 + 검증 — `_extract_diff()` 로 코드블록에서 diff 추출, `git apply --check` 로 적용 가능성 사전 검증
+- **4.3** Apply 흐름: branch 생성 → 원본 파일 fetch → diff apply (in-memory) → 변경된 파일들을 PUT contents 로 commit → PR open
+- **4.4** Fallback — diff 파싱/적용 실패 시 현재 방식 (markdown 첨부) 으로 폴백, PR 본문에 "AI 가 unified diff 생성 실패 — 수동 변환 필요" 명시
+- **4.5** 거절 시 PR close + branch 삭제
+- **4.6** Hybrid: 실 코드 diff + 분석 리포트 (incidents/<id>.md) 둘 다 첨부
+- **4.7** Patch 내용 redaction — LLM 출력에 환경변수/secret 형태 토큰(`sk-`, `AKIA`, `ghp_` 등) 있으면 `[REDACTED]` 치환
+- **4.8** Demo repo (`dlwodnjs724/warroom-demo`) 에 의도된 버그 코드 (stripe.py NPE) 심기 → 실제 파일이 존재해야 diff apply 가능
 
 ### Phase 5 — 문서/시연 + 정리 (1~2시간)
 
@@ -246,9 +259,9 @@ Phase 2 진입 전 long-term maintainability 정리.
 
 ```mermaid
 flowchart LR
-    P0[Phase 0 인프라] --> P1[Phase 1 Triage]
-    P0 --> P2[Phase 2 Slack 송신]
-    P0 --> P4[Phase 4 코드변경PR]
+    P0[Phase 0 인프라 ✅] --> P1[Phase 1 Triage ✅]
+    P0 --> P2[Phase 2 Slack 송신 ✅]
+    P0 --> P4[Phase 4 코드변경PR ★다음 1순위]
     P2 --> P3[Phase 3 Interactivity]
     P1 -.시너지.-> P4
     P3 --> P5[Phase 5 문서/시연]
@@ -269,11 +282,15 @@ flowchart LR
 
 ## 7. 추천 진행 순서
 
-1. **Phase 1** 부터 (독립적, 안전, vision 완결성에 직접 기여)
-2. 병렬로 **Phase 0** 인프라 셋업 (사용자가 짬짬이)
-3. Phase 0 완료 후 **Phase 2 + 3** 묶어서 진행 (Bot Token 한 번 셋업)
-4. 마지막에 **Phase 4** (가장 위험·고가치)
-5. **Phase 5** 문서/시연 + 정리
+1. ✅ **Phase 1** 부터 (독립적, 안전, vision 완결성에 직접 기여)
+2. ✅ 병렬로 **Phase 0** 인프라 셋업 (사용자가 짬짬이)
+3. ✅ Phase 0 완료 후 **Phase 2** (Slack 송신 — Bot Token 셋업 1회)
+4. **Phase 4** — 실 코드 변경 PR (다음 주 1순위, 데모 임팩트 최대: "AI Agent 가 실제 코드 PR 까지")
+5. **Phase 3** — Slack Interactivity (Approve 버튼 → 자동 PR 흐름의 마지막 piece)
+6. **Phase 2.8 / 2.9** — Slack truncation thread split, 실 LLM agent 단위 thread emit (틈틈이)
+7. **Phase 5** 문서/시연 + 정리
+
+→ Phase 3 보다 Phase 4 우선순위가 높은 이유: 현재도 `/incidents/{id}/approve` REST 로 PR 생성 가능 (Slack 버튼 없어도 데모 시연 가능). 반면 Phase 4 없으면 PR 에 실 코드 변경 자체가 없음.
 
 ---
 
@@ -301,3 +318,4 @@ flowchart LR
 | 2026-05-13 | Phase 1.6 완료 (90 tests). 테스트 패키지별 이동, SQLAlchemy 2.0 + Alembic, async store, docker-compose MySQL 8.0 |
 | 2026-05-13 | Phase 1.7 정식화 + 완료 (90 tests / 0 warnings). init_schema SQLite-only, .claude/rules 5개 분리, common.clock + ruff DTZ + StrEnum, ruff lint+format 전면, pre-commit. 5.6 (datetime cleanup) 은 1.7.3 에 흡수돼 제거. 5.7 GitHub Actions CI 신규 |
 | 2026-05-13 | Phase 0 (0.1 Slack / 0.2 Sentry / 0.2b ngrok / 0.3 GitHub App) 완료. Sentry 실 webhook E2E 검증 중 `Sentry-Hook-Signature` 헤더 버그 발견·수정 (`ecb1182`) |
+| 2026-05-14 | Phase 2 (Slack 가시성) 완료 — 6 commits (`c2feda2`~`0b6fb39`) + fix (`4000cfa`). 실 LLM + mock 양쪽 E2E 캡처 확보. 발견 잔무: Slack section truncation (2.8, patch=3044 / RCA=4146 실측), 실 LLM agent 단위 thread emit 누락 (2.9). 우선순위 재조정: 다음 주 Phase 4 (실 코드 변경 PR — unified diff prompt + git apply) 가 Phase 3 보다 1순위 |
