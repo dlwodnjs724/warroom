@@ -30,7 +30,9 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 db_url = os.getenv("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
-config.set_main_option("sqlalchemy.url", db_url)
+# configparser 는 '%' 를 interpolation 문법으로 해석하므로 set_main_option 전에 이스케이프.
+# MySQL URL 의 init_command 인용부호(%27, %20) 가 그대로 들어오면 ValueError 가 난다.
+config.set_main_option("sqlalchemy.url", db_url.replace("%", "%%"))
 
 target_metadata = Base.metadata
 
