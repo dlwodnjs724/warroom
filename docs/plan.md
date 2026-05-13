@@ -149,12 +149,15 @@ flowchart TD
 
 ### Phase 0 — 인프라 준비 (사용자 작업, 코드 변경 없음)
 
-| | 항목 | 산출물 |
+| | 항목 | 상태 |
 |---|---|---|
-| 0.1 | Slack 워크스페이스 + App (Bot Token, Signing Secret) | `.env` |
-| 0.2 | Sentry SaaS free + 데모 프로젝트 + webhook | webhook 1회 수신 검증 |
-| 0.3 | GitHub App + 데모 레포 install + private key | `.env`, `.secrets/` |
-| 0.4 | (선택) Anthropic 잔액 충전 — 시연 직전 | — |
+| 0.1 | Slack 워크스페이스 + App (Bot Token, Signing Secret) | ✅ workspace `warroom-rau5755`, `auth.test` 통과 |
+| 0.2 | Sentry SaaS Free + Internal Integration + Alert Rule | ✅ HMAC 서명 검증 + E2E webhook 통과 |
+| 0.2b | ngrok static domain (Sentry → 로컬 gateway) | ✅ `limelight-aneurism-thrive.ngrok-free.dev` |
+| 0.3 | GitHub App + 데모 레포 install + private key | ✅ JWT → installation token + repo 접근 |
+| 0.4 | (선택) Anthropic 잔액 충전 — 시연 직전 | ⬜ Gemini Free 로 우선 진행 |
+
+부산물: Phase 0.2 검증 중 발견된 버그 — Sentry Internal Integration 의 서명 헤더는 `Sentry-Hook-Signature` 인데 코드는 `X-Sentry-Signature` 로 읽고 있어 401. 별도 fix commit (`ecb1182`).
 
 ### Phase 1 — Triage 단단하게 (완료)
 
@@ -196,8 +199,7 @@ Phase 2 진입 전 long-term maintainability 정리.
 - **1.7.5** ✅ `(str, Enum)` → `StrEnum` 마이그레이션 (Severity/IncidentCategory/IncidentStatus)
 - **1.7.6** ✅ pre-commit framework + `ruff-pre-commit` hook — `git commit` 시 자동 강제
 - **1.7.7** ✅ docs/decisions.md stale 갱신 (메모리/JSON → SQLAlchemy, 200→202)
-
-⚠️ **datetime rule 잔여 미결**: `datetime.md §2` MySQL TZ 전략 (TIMESTAMP 컬럼 or connection `SET time_zone`) 미확정. Phase 2 이전에 결정 권장.
+- **1.7.8** ✅ `DateTime(timezone=True)` end-to-end — Alembic revision `6afb061f570b`, MySQL 서버/세션 `--default-time-zone=+00:00`, `?init_command=SET%20time_zone%3D...`
 
 ### Phase 2 — Slack 가시성 (3~4시간) ★ Phase 0.1 선행 필요
 
@@ -298,3 +300,4 @@ flowchart LR
 | 2026-05-13 | Phase 1 완료 (5 commits, 104 tests). Phase 1.6 추가 — DB 레이어 SQLAlchemy/Alembic, MySQL dev/prod + in-memory SQLite test, 테스트 패키지별 격리 |
 | 2026-05-13 | Phase 1.6 완료 (90 tests). 테스트 패키지별 이동, SQLAlchemy 2.0 + Alembic, async store, docker-compose MySQL 8.0 |
 | 2026-05-13 | Phase 1.7 정식화 + 완료 (90 tests / 0 warnings). init_schema SQLite-only, .claude/rules 5개 분리, common.clock + ruff DTZ + StrEnum, ruff lint+format 전면, pre-commit. 5.6 (datetime cleanup) 은 1.7.3 에 흡수돼 제거. 5.7 GitHub Actions CI 신규 |
+| 2026-05-13 | Phase 0 (0.1 Slack / 0.2 Sentry / 0.2b ngrok / 0.3 GitHub App) 완료. Sentry 실 webhook E2E 검증 중 `Sentry-Hook-Signature` 헤더 버그 발견·수정 (`ecb1182`) |
