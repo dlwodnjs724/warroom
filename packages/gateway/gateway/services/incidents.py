@@ -1,6 +1,6 @@
 """인시던트 조회 서비스 — read-only query.
 
-API layer 는 repository 를 직접 호출하지 않는다 (architecture.md 룰).
+API layer 는 repository 를 직접 호출하지 않는다 (.claude/rules/layering.md).
 응답 변환 / 필터 / 권한 체크가 들어갈 자리.
 """
 

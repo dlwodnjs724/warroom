@@ -6,6 +6,18 @@
 
 ---
 
+## 0. 현재 위치 / 다음 액션 (sticky)
+
+> **새 세션이 가장 먼저 볼 영역.** Phase 완료 / 우선순위 변경 시 즉시 갱신.
+
+- **마지막 완료**: gateway 패키지 layered 정리 (`api/services/infrastructure`) + `IncidentRepository` rename + `.claude/rules/layering.md` 신설 (2026-05-14)
+- **다음 1순위**: **Phase 4** — 실 코드 변경 PR (unified diff 프롬프트 + `git apply` + 폴백). 데모 임팩트 최대.
+- **다음 2순위**: **Phase 3** — Slack Interactivity (Approve 버튼 핸들러)
+- **병렬 가능 (대기 중)**: Phase 6.1 (logger), Phase 6.2 (orchestrator sentry 실 API). 사용자 명시 신호 후 진행.
+- **사용자 명시 deferred**: weekly report (사용자가 "리포트는 잠시 대기" 라고 함 — 신호 받을 때까지 대기)
+
+---
+
 ## 1. 목적
 
 장애 발생 → 알림 → 분석 → 패치 → 승인 → 배포까지 자동화하되, **사람의 일을 "판단" 두 번으로 제한**한다.

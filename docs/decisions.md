@@ -1,6 +1,6 @@
 # 프로젝트 기획 및 기술 결정 사항
 
-> 2026-04-09 최초 작성, 2026-05-13 Phase 1.6 반영 갱신
+> 2026-04-09 최초 작성, 2026-05-14 Phase 2 (Slack) 완료 + gateway layered 정리 반영
 
 ---
 
@@ -25,7 +25,7 @@
 | **Event Gateway** | FastAPI + uvicorn | 비동기, BackgroundTasks |
 | **AI Orchestration** | CrewAI 0.80+ | Sequential Process |
 | **LLM** | Anthropic Claude Sonnet 4.6 | claude-sonnet-4-6 |
-| **ChatOps** | Slack SDK (콘솔 stub → 실제 교체) | |
+| **ChatOps** | Slack Bot Token + chat.postMessage / thread / chat.update | Phase 2 완료, Block Kit 버튼은 Phase 3 |
 | **데이터 저장** | SQLAlchemy 2.0 async + Alembic | dev/prod=MySQL (docker-compose), test/ci=in-memory SQLite. `DATABASE_URL` 한 변수로 분기 |
 
 ---
@@ -68,22 +68,25 @@ Fixer Agent
 
 ## 프로토타입 범위 (Milestone 1)
 
-| 항목 | 프로토타입 | 향후 확장 |
+| 항목 | 현재 (2026-05-14) | 향후 확장 |
 |------|-----------|----------|
-| 인시던트 소스 | **Sentry** 우선 구현 | Datadog 파서 추가 |
-| 외부 API Tool | **Mock** (더미 응답) | 실제 Sentry/GitHub API 교체 |
-| ChatOps | **콘솔 출력** | Slack SDK 교체 |
-| 승인/반려 | **CLI 입력** (y/n) | Slack Interactive Button |
+| 인시던트 소스 | **Sentry + Datadog** 둘 다 구현 | PagerDuty 등 추가 시 monitors/ 어댑터만 |
+| 외부 API Tool | **Mock** (orchestrator/tools/) | 실제 Sentry/GitHub API 교체 (Phase 6.2) |
+| ChatOps | **Slack Bot 실 송신** (thread reply + chat.update) | Block Kit 버튼 핸들러 (Phase 3) |
+| 승인/반려 | **REST + CLI** (`/incidents/{id}/approve`, demo.py y/n) | Slack Interactive Button (Phase 3) |
 | 티켓/이력 | **MySQL/SQLite (SQLAlchemy)** + 보조 JSON | Jira API 연동 |
 
 ---
 
 ## 코드 구조 원칙
 
-1. **파서 분리:** `parsers/sentry.py`, `parsers/datadog.py` — 소스 추가 시 파일만 추가
-2. **Tool 분리:** `crew/tools/sentry.py`, `crew/tools/github.py` — Mock 함수를 실제 API 호출로 교체
-3. **Notifier 인터페이스:** `ConsoleNotifier`, `SlackNotifier` 동일 인터페이스 — 환경변수로 교체
-4. **Action Handler:** 승인/반려 핸들러를 인터페이스로 분리 — CLI → Slack 교체
+상세 layering / import 방향 / naming 룰은 [`.claude/rules/layering.md`](../.claude/rules/layering.md) 참고. 핵심:
+
+1. **3-layer (gateway):** `api/` (라우터) → `services/` (usecase) → `infrastructure/` (DB, monitors)
+2. **모니터 어댑터:** `infrastructure/monitors/{sentry,datadog,...}.py` — 소스 추가 시 어댑터 1개 + webhook 라우터 1줄
+3. **Tool 분리:** `orchestrator/tools/{sentry,github}.py` — 현재 mock, 실 API 교체는 Phase 6.2
+4. **Notifier 인터페이스:** `ConsoleNotifier` / `SlackNotifier` 동일 ABC — 환경변수로 교체
+5. **GitHub Client 인터페이스:** `GitHubAppClient` / `DryRunGitHubClient` — credentials 유무로 자동 분기
 
 ---
 
