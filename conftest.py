@@ -15,7 +15,16 @@ def _isolate_db(monkeypatch):
     # 환경에 주입한다. 이를 무력화하려면 import 이후에 delenv 해야 한다.
     import gateway.main  # noqa: F401 — side-effect import (load_dotenv 트리거)
 
-    for var in ("SENTRY_CLIENT_SECRET", "WARROOM_DATADOG_TOKEN"):
+    for var in (
+        "SENTRY_CLIENT_SECRET",
+        "WARROOM_DATADOG_TOKEN",
+        "GITHUB_REPO",
+        "GITHUB_APP_ID",
+        "GITHUB_APP_PRIVATE_KEY_PATH",
+        "GITHUB_INSTALLATION_ID",
+        "SLACK_BOT_TOKEN",
+        "SLACK_CHANNEL",
+    ):
         monkeypatch.delenv(var, raising=False)
 
     from gateway import store as store_mod
