@@ -1,6 +1,6 @@
 # 프로젝트 기획 및 기술 결정 사항
 
-> 2026-04-09 기준으로 정리된 설계/기술 결정 내용
+> 2026-04-09 최초 작성, 2026-05-13 Phase 1.6 반영 갱신
 
 ---
 
@@ -26,7 +26,7 @@
 | **AI Orchestration** | CrewAI 0.80+ | Sequential Process |
 | **LLM** | Anthropic Claude Sonnet 4.6 | claude-sonnet-4-6 |
 | **ChatOps** | Slack SDK (콘솔 stub → 실제 교체) | |
-| **데이터 저장** | 프로토타입은 메모리/JSON | 추후 RDB 확장 포인트 |
+| **데이터 저장** | SQLAlchemy 2.0 async + Alembic | dev/prod=MySQL (docker-compose), test/ci=in-memory SQLite. `DATABASE_URL` 한 변수로 분기 |
 
 ---
 
@@ -35,7 +35,7 @@
 ### Sub-module 1: Event Gateway (FastAPI)
 
 - `/webhook/sentry`, `/webhook/datadog` 등 소스별 엔드포인트 수신
-- **즉시 `200 OK` 반환** + `BackgroundTasks`로 파이프라인 비동기 트리거
+- **즉시 `202 Accepted` 반환** + `BackgroundTasks`로 파이프라인 비동기 트리거
 - 소스(Sentry/Datadog)에 따라 파서를 교체하는 구조 → **새 소스 추가 시 파서만 추가**
 
 ### Sub-module 2: Multi-Agent Orchestration (CrewAI)
@@ -74,7 +74,7 @@ Fixer Agent
 | 외부 API Tool | **Mock** (더미 응답) | 실제 Sentry/GitHub API 교체 |
 | ChatOps | **콘솔 출력** | Slack SDK 교체 |
 | 승인/반려 | **CLI 입력** (y/n) | Slack Interactive Button |
-| 티켓/이력 | **JSON 파일 저장** | Jira API 연동, RDB 저장 |
+| 티켓/이력 | **MySQL/SQLite (SQLAlchemy)** + 보조 JSON | Jira API 연동 |
 
 ---
 
@@ -89,7 +89,7 @@ Fixer Agent
 
 ## 비기능 요구사항 (변경 없음)
 
-- Webhook 수신 후 **1초 이내 200 OK** 반환 (BackgroundTasks 활용)
+- Webhook 수신 후 **1초 이내 202 Accepted** 반환 (BackgroundTasks 활용)
 - LLM Rate Limit / 외부 API 실패 시 크래시 없이 Fallback 메시지 출력
 - API Key 등 민감정보는 `.env` 관리, 코드 하드코딩 금지
 - Fixer 출력 코드는 반드시 개발자 검토 후 적용 (자동 배포 없음)

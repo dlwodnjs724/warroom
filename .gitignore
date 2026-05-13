@@ -30,4 +30,5 @@ references/
 # IDE
 .idea/
 .vscode/
-.claude/
+.claude/*
+!.claude/rules/
