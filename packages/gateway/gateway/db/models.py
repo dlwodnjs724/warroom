@@ -45,6 +45,6 @@ class Report(Base):
     patch_suggestion: Mapped[str | None] = mapped_column(Text, nullable=True)
     post_mortem_draft: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_approved: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     incident: Mapped[Incident] = relationship(back_populates="report")

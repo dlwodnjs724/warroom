@@ -3,11 +3,13 @@ services:
     image: mysql:8.0
     container_name: warroom-mysql
     restart: unless-stopped
+    command: --default-time-zone=+00:00
     environment:
       MYSQL_DATABASE: warroom
       MYSQL_USER: warroom
       MYSQL_PASSWORD: warroom
       MYSQL_ROOT_PASSWORD: rootpass
+      TZ: UTC
     ports:
       - "3306:3306"
     volumes:

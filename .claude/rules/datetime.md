@@ -24,19 +24,30 @@ def test_dedupe_ttl(monkeypatch):
     monkeypatch.setattr("common.clock.now", lambda: datetime(2026, 5, 13, 12, 0, tzinfo=ZoneInfo("UTC")))
 ```
 
-## 2. MySQL `DATETIME` 은 TZ 미저장
+## 2. 저장은 무조건 tz-aware UTC
 
-write 시 tz-aware → read 시 naive 로 돌아온다. 비교하려면 명시 변환:
+스키마는 모든 timestamp 컬럼을 `DateTime(timezone=True)` 로 선언한다 — SQLAlchemy 가 UTC 보존을 보장:
 
 ```python
-stored = await s.get(Incident, id).received_at   # naive
-stored_aware = stored.replace(tzinfo=APP_TZ)     # 비교 가능
-
-# 또는 비교 직전 양쪽 normalize
-elapsed = now().replace(tzinfo=None) - stored
+created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 ```
 
-장기적으로 `TIMESTAMP` 컬럼 또는 connection time_zone 강제 (`SET time_zone='+00:00'`) 로 정리하는 게 안전 — 운영 셋업 단계에서 결정.
+- **SQLite (aiosqlite)**: ISO TEXT 로 저장, TZ 보존
+- **MySQL (asyncmy)**: SQLAlchemy 가 `TIMESTAMP` 로 매핑 → 내부 UTC + 세션 TZ 로 변환 반환
+
+MySQL 서버/세션 TZ 도 UTC 로 강제 (이중 안전망):
+- `docker-compose.yml`: `command: --default-time-zone=+00:00`
+- `DATABASE_URL`: `?init_command=SET%20time_zone%3D%27%2B00:00%27`
+
+→ tz-aware datetime 으로 write, tz-aware datetime 으로 read. naive 가 어디서도 안 끼게 한다.
+
+비교 코드는 그냥 빼면 됨:
+
+```python
+elapsed = now() - stored_event.received_at   # 양쪽 tz-aware UTC, 안전
+```
+
+호스트/컨테이너 TZ 는 무관 (`clock.now()` 가 항상 UTC). 그래도 관례상 `TZ=UTC` 로 통일 (로그/cron 정합성).
 
 ## 3. JSON 직렬화는 `.isoformat()`
 
