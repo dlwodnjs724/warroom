@@ -1,4 +1,5 @@
 """Runner 헬퍼 함수 단위 테스트."""
+
 from common.models import IncidentCategory, IncidentEvent, Severity
 from orchestrator.runner import (
     _build_triage_only_report,

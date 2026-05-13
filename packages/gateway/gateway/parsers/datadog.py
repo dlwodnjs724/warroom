@@ -22,6 +22,7 @@ Incident webhook 예시 페이로드:
       "incident_state": "active"
     }
 """
+
 import uuid
 from typing import Any
 

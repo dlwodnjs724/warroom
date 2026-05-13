@@ -13,10 +13,10 @@ provider/model 선택 로직을 한곳에 모은다.
     WARROOM_ANALYST_MODEL   Analyst 에이전트 모델 오버라이드
     WARROOM_FIXER_MODEL     Fixer 에이전트 모델 오버라이드
 """
+
 import os
 
 from crewai import LLM
-
 
 _DEFAULTS: dict[str, dict[str, str]] = {
     "gemini": {
@@ -52,10 +52,7 @@ _ROLE_ENV = {
 def current_provider() -> str:
     provider = os.getenv("LLM_PROVIDER", "gemini").lower()
     if provider not in _DEFAULTS:
-        raise ValueError(
-            f"지원하지 않는 LLM_PROVIDER: {provider!r}. "
-            f"사용 가능: {', '.join(_DEFAULTS)}"
-        )
+        raise ValueError(f"지원하지 않는 LLM_PROVIDER: {provider!r}. 사용 가능: {', '.join(_DEFAULTS)}")
     return provider
 
 

@@ -11,18 +11,17 @@ PR 생성 흐름:
     3. incidents/<id>.md 파일을 PUT contents 로 commit
     4. PR open
 """
+
 import base64
 import time
 from pathlib import Path
 
 import httpx
 import jwt
-
 from common.models import ResolutionReport
 
 from .base import GitHubClient, PullRequestResult
 from .report import branch_name, incident_markdown, pr_body, pr_title
-
 
 _API = "https://api.github.com"
 
@@ -100,9 +99,7 @@ class GitHubAppClient(GitHubClient):
         return self._token
 
     def _base_sha(self, repo: str, branch: str, headers: dict) -> str:
-        resp = self._http.get(
-            f"{_API}/repos/{repo}/git/ref/heads/{branch}", headers=headers
-        )
+        resp = self._http.get(f"{_API}/repos/{repo}/git/ref/heads/{branch}", headers=headers)
         resp.raise_for_status()
         return resp.json()["object"]["sha"]
 

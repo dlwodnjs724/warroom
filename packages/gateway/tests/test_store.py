@@ -3,10 +3,10 @@
 conftest 의 _isolate_db (autouse) + schema fixture 가 in-memory SQLite 에
 스키마를 생성한다. 각 테스트는 격리된 fresh DB 를 받는다.
 """
+
 from datetime import datetime
 
 import pytest
-
 from common.clock import APP_TZ
 from common.models import (
     IncidentCategory,

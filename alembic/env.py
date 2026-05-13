@@ -2,6 +2,7 @@
 
 Async 엔진(asyncmy/aiosqlite)을 sync wrapper 로 변환해 Alembic 이 마이그레이션을 돌릴 수 있게 한다.
 """
+
 import asyncio
 import os
 import sys

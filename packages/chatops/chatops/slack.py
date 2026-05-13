@@ -9,16 +9,15 @@ URL이 설정되어 있으면 실제로 POST 하고, 없으면 dry-run 모드로
 Block Kit 페이로드를 JSON Lines 파일에 누적 기록한다. 두 경우 모두
 콘솔에 송신/기록 사실을 한 줄 남겨 개발 가시성을 유지한다.
 """
+
 import json
 import os
 from pathlib import Path
 
 import httpx
-
 from common.models import IncidentEvent, ResolutionReport
 
 from .base import Notifier
-
 
 _SEV_EMOJI = {
     "CRITICAL": "🔥",

@@ -11,13 +11,14 @@ warroom 프로토타입 실행 진입점.
     MOCK_PIPELINE        true 이면 LLM 호출 없이 mock 응답 사용
     DATABASE_URL         dev/prod=MySQL, test=in-memory SQLite (기본: 로컬 sqlite 파일)
 """
+
 import asyncio
 import json
 import os
 import sys
-from common.clock import now
 from pathlib import Path
 
+from common.clock import now
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -45,7 +46,6 @@ from gateway.db.session import init_schema, is_sqlite_backend
 from gateway.parsers import sentry as sentry_parser
 from gateway.store import get_store
 from orchestrator.runner import run_pipeline
-
 
 MOCK_SENTRY_PAYLOAD = {
     "data": {

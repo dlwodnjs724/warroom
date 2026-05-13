@@ -1,4 +1,5 @@
 """Gateway 패키지 테스트용 — async 스키마 생성 fixture 제공."""
+
 import pytest_asyncio
 
 

@@ -1,8 +1,8 @@
 from crewai import Agent
 
 from .llm import analyst_llm, fixer_llm, triage_llm
-from .tools.sentry import sentry_issue_lookup
 from .tools.github import github_source_lookup
+from .tools.sentry import sentry_issue_lookup
 
 
 def make_triage_agent() -> Agent:

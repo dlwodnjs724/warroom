@@ -8,6 +8,7 @@ Event Gateway — FastAPI webhook receiver.
   POST /incidents/{id}/approve  패치 제안 승인
   POST /incidents/{id}/reject   패치 제안 반려
 """
+
 import asyncio
 import json
 import os
@@ -22,9 +23,10 @@ from fastapi.responses import JSONResponse
 load_dotenv()
 
 from common.models import IncidentCategory, IncidentEvent, IncidentStatus, ResolutionReport, Severity
+
+from gateway.db.session import current_url, init_schema, is_sqlite_backend
 from gateway.parsers import datadog as datadog_parser
 from gateway.parsers import sentry as sentry_parser
-from gateway.db.session import current_url, init_schema, is_sqlite_backend
 from gateway.security import verify_datadog_token, verify_sentry_signature, warn_if_secrets_missing
 from gateway.store import get_store
 

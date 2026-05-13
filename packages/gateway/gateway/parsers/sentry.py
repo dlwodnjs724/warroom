@@ -1,5 +1,6 @@
 import uuid
 from typing import Any
+
 from common.models import IncidentEvent
 
 

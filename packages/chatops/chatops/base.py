@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+
 from common.models import IncidentEvent, ResolutionReport
 
 

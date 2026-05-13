@@ -8,6 +8,7 @@ secret 이 비어 있으면 검증을 건너뛴다. 운영자는 startup 로그�
 Sentry: HMAC-SHA256(raw_body, SENTRY_CLIENT_SECRET) → X-Sentry-Signature 헤더
 Datadog: 표준 서명 헤더가 없으므로 공유 토큰 헤더(X-Warroom-Token)로 대체
 """
+
 import hashlib
 import hmac
 import os
@@ -34,10 +35,7 @@ def verify_datadog_token(token: str | None) -> bool:
 
 def warn_if_secrets_missing() -> None:
     """Startup 시 호출 — secret 이 없으면 dev 모드임을 명시적으로 알린다."""
-    missing = [
-        name for name in ("SENTRY_CLIENT_SECRET", "WARROOM_DATADOG_TOKEN")
-        if not os.getenv(name)
-    ]
+    missing = [name for name in ("SENTRY_CLIENT_SECRET", "WARROOM_DATADOG_TOKEN") if not os.getenv(name)]
     if missing:
         print(
             f"[WARROOM] 경고: 다음 webhook 서명 검증이 비활성화되어 있습니다 — {', '.join(missing)}. "

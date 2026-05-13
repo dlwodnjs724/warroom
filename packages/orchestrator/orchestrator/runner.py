@@ -1,8 +1,8 @@
 import os
 import time
 
-from common.models import IncidentCategory, IncidentEvent, ResolutionReport, Severity
 from chatops.base import Notifier
+from common.models import IncidentCategory, IncidentEvent, ResolutionReport, Severity
 
 # LLM 사용 여부: MOCK_PIPELINE=true 이면 mock 응답 사용
 _USE_MOCK = os.getenv("MOCK_PIPELINE", "false").lower() == "true"
@@ -131,8 +131,9 @@ def _run_crew_pipeline(event: IncidentEvent, notifier: Notifier) -> ResolutionRe
     Triage 단계 결과의 category 가 'code' 인 경우에만 Analyst/Fixer 까지
     진행한다. 그 외 카테고리는 코드 패치가 무의미하므로 분석 리포트만 남긴다.
     """
-    from crewai import Crew, Task, Process
-    from .agents import make_triage_agent, make_analyst_agent, make_fixer_agent
+    from crewai import Crew, Process, Task
+
+    from .agents import make_analyst_agent, make_fixer_agent, make_triage_agent
 
     triage_agent = make_triage_agent()
     payload_summary = (
@@ -235,9 +236,7 @@ def _build_triage_only_report(
         triage_summary=triage_output,
         root_cause="(코드 외 카테고리 — 추가 분석 단계 생략)",
         patch_suggestion="",
-        post_mortem_draft=(
-            f"카테고리: {category.value}. 코드 패치 대신 운영 대응이 필요합니다."
-        ),
+        post_mortem_draft=(f"카테고리: {category.value}. 코드 패치 대신 운영 대응이 필요합니다."),
     )
 
 

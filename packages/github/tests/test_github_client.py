@@ -3,12 +3,12 @@
 dry-run 백엔드의 파일 출력과 GitHubAppClient 의 REST 호출 시퀀스를 검증한다.
 실 GitHub API 는 호출하지 않고 FakeHttp 로 응답을 가로챈다.
 """
+
 import base64
 import json
 from datetime import datetime
 
 import pytest
-
 from common.clock import APP_TZ
 from common.models import ResolutionReport, Severity
 from github.app import GitHubAppClient
@@ -129,19 +129,17 @@ class FakeHttp:
 class TestAppClient:
     def test_create_patch_pr_full_sequence(self, report, tmp_path, monkeypatch):
         # JWT 생성은 실 키가 필요하므로 monkeypatch 로 우회
-        monkeypatch.setattr(
-            "github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token"
-        )
+        monkeypatch.setattr("github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")
 
         pem = tmp_path / "key.pem"
         pem.write_text(_FAKE_KEY)
 
         http = FakeHttp(
             [
-                FakeResponse(payload={"token": "ghs_install_token"}),         # install token
-                FakeResponse(payload={"object": {"sha": "base-sha-abc"}}),    # base sha
-                FakeResponse(payload={}),                                     # create branch
-                FakeResponse(payload={}),                                     # put file
+                FakeResponse(payload={"token": "ghs_install_token"}),  # install token
+                FakeResponse(payload={"object": {"sha": "base-sha-abc"}}),  # base sha
+                FakeResponse(payload={}),  # create branch
+                FakeResponse(payload={}),  # put file
                 FakeResponse(
                     payload={
                         "html_url": "https://github.com/toby/demo/pull/42",
@@ -188,9 +186,7 @@ class TestAppClient:
         assert pr_body["base"] == "main"
 
     def test_token_is_cached_across_calls(self, report, tmp_path, monkeypatch):
-        monkeypatch.setattr(
-            "github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token"
-        )
+        monkeypatch.setattr("github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")
         pem = tmp_path / "key.pem"
         pem.write_text(_FAKE_KEY)
 

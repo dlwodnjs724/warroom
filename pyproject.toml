@@ -44,14 +44,30 @@ testpaths = [
 
 [tool.ruff]
 target-version = "py313"
+line-length = 110
+extend-exclude = ["packages/*/build/**", "alembic/versions/**"]
 
 [tool.ruff.lint]
-# DTZ 만 강제 — naive datetime 호출 차단 (common.clock 사용 강제).
-# 다른 lint 룰은 코드 정리 우선순위가 정해지면 그때 추가.
-select = ["DTZ"]
+# 권장 세트:
+#   E,F  : pycodestyle errors + pyflakes (기본)
+#   I    : isort — import 정렬
+#   B    : flake8-bugbear — 흔한 버그 패턴
+#   UP   : pyupgrade — 구식 문법 현대화
+#   SIM  : flake8-simplify — 단순화 가능 패턴
+#   DTZ  : flake8-datetimez — naive datetime 차단 (common.clock 강제)
+select = ["E", "F", "I", "B", "UP", "SIM", "DTZ"]
+# 라인 길이는 format 이 알아서 처리 → E501 은 제외
+ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
 # clock 모듈은 helper 정의 자체. APP_TZ 인자 명시 사용이라 DTZ 면제.
 "packages/common/common/clock.py" = ["DTZ"]
-# build 산출물 / 외부 라이브러리류 제외
-"packages/*/build/**" = ["DTZ"]
+# demo.py / gateway/main.py: load_dotenv() / 조건부 import 후 모듈 import — 의도된 패턴
+"demo.py" = ["E402"]
+"packages/gateway/gateway/main.py" = ["E402"]
+# alembic env.py: sys.path 조작 후 import
+"alembic/env.py" = ["E402"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

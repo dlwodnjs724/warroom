@@ -3,11 +3,12 @@
 백엔드는 DATABASE_URL 환경변수로 결정 (sqlite vs mysql). 자세한 정책은
 docs/plan.md 의 환경 매트릭스 참조.
 """
+
 from datetime import datetime
 
+from common.models import IncidentEvent, IncidentStatus, ResolutionReport
 from sqlalchemy import select
 
-from common.models import IncidentEvent, IncidentStatus, ResolutionReport
 from gateway.db.models import Incident, Report
 from gateway.db.session import get_session_factory
 
@@ -137,9 +138,7 @@ def _report_to_dict(report: Report) -> dict:
         "post_mortem_draft": report.post_mortem_draft,
         "is_approved": report.is_approved,
         "created_at": (
-            report.created_at.isoformat()
-            if isinstance(report.created_at, datetime)
-            else report.created_at
+            report.created_at.isoformat() if isinstance(report.created_at, datetime) else report.created_at
         ),
     }
 

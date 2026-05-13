@@ -1,4 +1,5 @@
 """uvicorn으로 gateway 서버 실행."""
+
 import uvicorn
 
 if __name__ == "__main__":

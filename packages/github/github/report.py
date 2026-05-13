@@ -1,4 +1,5 @@
 """ResolutionReport → 파일/PR 본문 마크다운 변환."""
+
 from common.models import ResolutionReport
 
 

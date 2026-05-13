@@ -3,6 +3,7 @@
 스키마는 운영 대상이 MySQL 임을 가정해 VARCHAR 길이를 명시한다.
 변동 길이 본문(triage_summary, patch 등)은 Text 로 둔다.
 """
+
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text

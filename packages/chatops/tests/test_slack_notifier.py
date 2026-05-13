@@ -1,9 +1,9 @@
 """SlackNotifier 단위 테스트."""
+
 import json
 from datetime import datetime
 
 import pytest
-
 from chatops.slack import SlackNotifier, _truncate
 from common.clock import APP_TZ
 from common.models import IncidentEvent, ResolutionReport, Severity
@@ -125,7 +125,8 @@ class TestTruncation:
         payload = json.loads(log.read_text().splitlines()[0])
 
         rca_block = next(
-            b for b in payload["blocks"]
+            b
+            for b in payload["blocks"]
             if b.get("type") == "section" and "근본 원인" in b.get("text", {}).get("text", "")
         )
         assert "…" in rca_block["text"]["text"]

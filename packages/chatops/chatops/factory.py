@@ -3,6 +3,7 @@
 환경변수:
     WARROOM_NOTIFIER    console | slack | both    (기본: both)
 """
+
 import os
 
 from .base import Notifier
@@ -37,6 +38,4 @@ def make_notifier() -> Notifier:
         return SlackNotifier()
     if backend == "both":
         return _MultiNotifier([ConsoleNotifier(), SlackNotifier()])
-    raise ValueError(
-        f"지원하지 않는 WARROOM_NOTIFIER: {backend!r}. 사용 가능: console, slack, both"
-    )
+    raise ValueError(f"지원하지 않는 WARROOM_NOTIFIER: {backend!r}. 사용 가능: console, slack, both")

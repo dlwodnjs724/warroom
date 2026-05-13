@@ -1,8 +1,7 @@
 """Webhook 서명 검증 단위 테스트."""
+
 import hashlib
 import hmac
-
-import pytest
 
 from gateway.security import verify_datadog_token, verify_sentry_signature
 
