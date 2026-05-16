@@ -3,6 +3,7 @@ import time
 
 from chatops.base import Notifier
 from common.models import IncidentCategory, IncidentEvent, ResolutionReport, Severity
+from common.redact import redact_secrets
 
 # LLM 사용 여부: MOCK_PIPELINE=true 이면 mock 응답 사용
 _USE_MOCK = os.getenv("MOCK_PIPELINE", "false").lower() == "true"
@@ -118,10 +119,10 @@ lazy init 패턴 도입 시 영향받는 모든 호출부를 검토하는 프로
         incident_id=event.incident_id,
         severity=Severity.HIGH,
         category=IncidentCategory.CODE,
-        triage_summary=triage_output,
-        root_cause=analyst_output,
-        patch_suggestion=patch_suggestion,
-        post_mortem_draft=postmortem,
+        triage_summary=redact_secrets(triage_output),
+        root_cause=redact_secrets(analyst_output),
+        patch_suggestion=redact_secrets(patch_suggestion),
+        post_mortem_draft=redact_secrets(postmortem),
     )
     notifier.on_resolution_ready(report)
     return report
@@ -234,10 +235,10 @@ def _run_crew_pipeline(event: IncidentEvent, notifier: Notifier) -> ResolutionRe
         incident_id=event.incident_id,
         severity=severity,
         category=category,
-        triage_summary=triage_output,
-        root_cause=analyst_output,
-        patch_suggestion=patch,
-        post_mortem_draft=postmortem,
+        triage_summary=redact_secrets(triage_output),
+        root_cause=redact_secrets(analyst_output),
+        patch_suggestion=redact_secrets(patch),
+        post_mortem_draft=redact_secrets(postmortem),
     )
     notifier.on_resolution_ready(report)
     return report
@@ -254,7 +255,7 @@ def _build_triage_only_report(
         incident_id=event.incident_id,
         severity=severity,
         category=category,
-        triage_summary=triage_output,
+        triage_summary=redact_secrets(triage_output),
         root_cause="(코드 외 카테고리 — 추가 분석 단계 생략)",
         patch_suggestion="",
         post_mortem_draft=(f"카테고리: {category.value}. 코드 패치 대신 운영 대응이 필요합니다."),
