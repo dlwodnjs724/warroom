@@ -25,6 +25,9 @@ class Incident(Base):
     # Slack 스레드 영속화 — chat.update / thread reply 시 재사용
     slack_channel_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     slack_ts: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # GitHub PR 영속화 — 거절 시 close + branch 삭제 위해 필요 (Phase 4.5)
+    pr_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pr_branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     report: Mapped["Report | None"] = relationship(
         back_populates="incident",

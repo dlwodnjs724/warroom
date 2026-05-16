@@ -33,3 +33,11 @@ class GitHubClient(Protocol):
             base_branch: PR target branch
         """
         ...
+
+    def close_pr(self, repo: str, pr_number: int, branch: str) -> None:
+        """반려된 인시던트의 PR 을 close 하고 branch 도 삭제 (Phase 4.5).
+
+        404 / 이미 닫힌 PR 등 멱등 처리. 호출자 (decisions service) 가 예외에
+        의존하지 않도록 best-effort 로 구현.
+        """
+        ...

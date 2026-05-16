@@ -34,10 +34,39 @@ async def handle_decision(incident_id: str, approved: bool) -> JSONResponse:
     }
     if approved:
         pr_result = _open_pr(entry)
+        if pr_result and isinstance(pr_result.get("number"), int) and pr_result.get("branch"):
+            await repo.set_pr_info(incident_id, pr_result["number"], pr_result["branch"])
         if pr_result:
             response["pull_request"] = pr_result
+    else:
+        closed = await _close_pr_if_exists(incident_id)
+        if closed:
+            response["pr_closed"] = closed
 
     return JSONResponse(response)
+
+
+async def _close_pr_if_exists(incident_id: str) -> dict | None:
+    """반려 시 영속화된 PR 정보가 있으면 close + branch 삭제 (Phase 4.5)."""
+    repo_target = os.getenv("GITHUB_REPO")
+    if not repo_target:
+        return None
+
+    repo = get_repository()
+    pr_info = await repo.get_pr_info(incident_id)
+    if not pr_info:
+        return None
+    pr_number, branch = pr_info
+
+    from github.factory import make_github_client
+
+    client = make_github_client()
+    try:
+        client.close_pr(repo_target, pr_number, branch)
+    except Exception as e:
+        print(f"[WARROOM] PR cleanup 실패 (best-effort): {e}")
+        return {"number": pr_number, "branch": branch, "error": str(e)}
+    return {"number": pr_number, "branch": branch, "closed": True}
 
 
 def _open_pr(entry: dict) -> dict | None:

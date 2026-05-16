@@ -128,6 +128,84 @@ class TestApprovalPrSkip:
         assert resp.json()["pull_request"]["skipped"] is True
 
 
+class TestRejectPrCleanup:
+    """반려 시 영속화된 PR 정보가 있으면 close + branch 삭제 시도."""
+
+    async def _seed_awaiting(self, incident_id="INC-REJECT-1"):
+        from common.models import (
+            IncidentCategory,
+            IncidentEvent,
+            IncidentStatus,
+            ResolutionReport,
+            Severity,
+        )
+        from gateway.infrastructure.db.repository import get_repository
+
+        repo = get_repository()
+        event = IncidentEvent(incident_id=incident_id, source="sentry", title="t", raw_payload={})
+        await repo.add(event)
+        await repo.save_report(
+            incident_id,
+            ResolutionReport(
+                incident_id=incident_id,
+                severity=Severity.HIGH,
+                category=IncidentCategory.CODE,
+                triage_summary="t",
+                root_cause="r",
+                patch_suggestion="p",
+                post_mortem_draft="pm",
+            ),
+        )
+        await repo.update_status(incident_id, IncidentStatus.AWAITING_APPROVAL)
+        return incident_id
+
+    async def test_reject_with_pr_info_calls_close(self, client, monkeypatch, tmp_path):
+        from gateway.infrastructure.db.repository import get_repository
+
+        log_path = tmp_path / "gh.jsonl"
+        monkeypatch.setenv("GITHUB_REPO", "owner/demo")
+        monkeypatch.setenv("GITHUB_DRY_RUN_LOG", str(log_path))
+
+        incident_id = await self._seed_awaiting()
+        repo = get_repository()
+        await repo.set_pr_info(incident_id, 99, "warroom/incident-INC-REJECT-1-x")
+
+        resp = client.post(f"/incidents/{incident_id}/reject")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "rejected"
+        assert body["pr_closed"]["number"] == 99
+        assert body["pr_closed"]["closed"] is True
+
+        # dry-run client 가 close_pr 페이로드 기록했는지
+        lines = log_path.read_text().splitlines()
+        assert any(json.loads(line).get("action") == "close_pr" for line in lines)
+
+    async def test_reject_without_pr_info_silently_skips_close(self, client, monkeypatch):
+        monkeypatch.setenv("GITHUB_REPO", "owner/demo")
+        incident_id = await self._seed_awaiting("INC-REJECT-NOPR-1")
+
+        resp = client.post(f"/incidents/{incident_id}/reject")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "rejected"
+        assert "pr_closed" not in body  # PR 정보 없으면 cleanup 시도 안 함
+
+    async def test_approve_persists_pr_info(self, client, monkeypatch):
+        from gateway.infrastructure.db.repository import get_repository
+
+        monkeypatch.setenv("GITHUB_REPO", "owner/demo")
+        incident_id = await self._seed_awaiting("INC-APPROVE-PERSIST-1")
+
+        resp = client.post(f"/incidents/{incident_id}/approve")
+        assert resp.status_code == 200
+
+        # dry-run 은 pr_number=None → set_pr_info 미호출
+        repo = get_repository()
+        pr_info = await repo.get_pr_info(incident_id)
+        assert pr_info is None  # dry-run 은 pr_number 없음
+
+
 class TestWebhookSignatureVerification:
     def test_sentry_rejects_invalid_signature(self, client, monkeypatch):
         monkeypatch.setenv("SENTRY_CLIENT_SECRET", "topsecret")

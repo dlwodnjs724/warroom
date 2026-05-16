@@ -125,6 +125,14 @@ class FakeHttp:
         self.calls.append(("PUT", url, headers, json))
         return self._next()
 
+    def patch(self, url, headers, json=None):
+        self.calls.append(("PATCH", url, headers, json))
+        return self._next()
+
+    def delete(self, url, headers):
+        self.calls.append(("DELETE", url, headers, None))
+        return self._next()
+
 
 class TestAppClient:
     def test_create_patch_pr_full_sequence(self, report, tmp_path, monkeypatch):
@@ -334,6 +342,57 @@ class TestAppClient:
         assert "https://api.github.com/repos/toby/demo/git/blobs" not in urls
         # markdown 폴백이 PUT contents/incidents 로 떨어졌는지
         assert any("contents/incidents/INC-BAD-001.md" in u for _, u, _, _ in http.calls)
+
+    def test_close_pr_patches_then_deletes_branch(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")
+        pem = tmp_path / "key.pem"
+        pem.write_text(_FAKE_KEY)
+
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_install"}),  # install token
+                FakeResponse(status_code=200, payload={}),  # PATCH pulls
+                FakeResponse(status_code=204, payload={}),  # DELETE refs
+            ]
+        )
+        client = GitHubAppClient(
+            app_id="999",
+            private_key_path=str(pem),
+            installation_id="123",
+            http_client=http,
+        )
+        client.close_pr("toby/demo", 42, "warroom/incident-X-1")
+
+        methods_urls = [(m, u) for m, u, _, _ in http.calls]
+        assert methods_urls == [
+            ("POST", "https://api.github.com/app/installations/123/access_tokens"),
+            ("PATCH", "https://api.github.com/repos/toby/demo/pulls/42"),
+            ("DELETE", "https://api.github.com/repos/toby/demo/git/refs/heads/warroom/incident-X-1"),
+        ]
+        # close payload
+        _, _, _, patch_body = http.calls[1]
+        assert patch_body == {"state": "closed"}
+
+    def test_close_pr_tolerates_404(self, tmp_path, monkeypatch):
+        """이미 닫혀있거나 브랜치 없음 — 멱등 처리."""
+        monkeypatch.setattr("github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")
+        pem = tmp_path / "key.pem"
+        pem.write_text(_FAKE_KEY)
+
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_install"}),
+                FakeResponse(status_code=404, payload={}),  # PATCH → already closed
+                FakeResponse(status_code=404, payload={}),  # DELETE → branch gone
+            ]
+        )
+        client = GitHubAppClient(
+            app_id="999",
+            private_key_path=str(pem),
+            installation_id="123",
+            http_client=http,
+        )
+        client.close_pr("toby/demo", 42, "x")  # 예외 없어야 한다
 
     def test_token_is_cached_across_calls(self, report, tmp_path, monkeypatch):
         monkeypatch.setattr("github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")
