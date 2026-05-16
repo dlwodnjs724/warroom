@@ -77,17 +77,17 @@ lazy init 패턴 도입 시 영향받는 모든 호출부를 검토하는 프로
     notifier.on_agent_update(event.incident_id, "Fixer Agent", "패치 코드 및 재발 방지 계획 수립 중...")
     time.sleep(1)
     patch_suggestion = """\
-```python
-# app/gateways/stripe.py — 즉시 패치
+```diff
+--- a/app/gateways/stripe.py
++++ b/app/gateways/stripe.py
+@@ -22,6 +22,7 @@ class StripeGateway:
+         return self.client.refunds.create(charge=charge_id)
 
-def charge(self, payment_method, amount):
-    self._ensure_client()  # ← 누락된 호출 추가
-    params = {
-        "amount": amount,
-        "currency": "krw",
-        "payment_method": payment_method,
-    }
-    return self.client.charges.create(**params)
+     def charge(self, payment_method, amount):
++        self._ensure_client()
+         params = {
+             "amount": amount,
+             "currency": "krw",
 ```"""
 
     postmortem = """\
@@ -192,12 +192,30 @@ def _run_crew_pipeline(event: IncidentEvent, notifier: Notifier) -> ResolutionRe
     )
     fixer_task = Task(
         description=(
-            "Analyst Agent의 근본 원인 분석을 바탕으로 다음을 작성하세요.\n"
-            "1. 즉시 적용 가능한 패치 코드 (Python 코드 블록으로)\n"
-            "2. 포스트모템 초안\n\n"
-            "⚠️ 이 패치는 제안일 뿐이며, 개발자 승인 없이 자동으로 적용되지 않습니다."
+            "Analyst Agent 의 RCA 를 바탕으로 다음 2개를 순서대로 작성하세요.\n\n"
+            "## 1. 즉시 패치 — unified diff\n"
+            "- 반드시 ` ```diff ` 코드블록으로 감싸기 (일반 ```python 금지)\n"
+            "- `git apply` 로 적용 가능한 형식\n"
+            "- 파일 경로는 repo 루트 기준 (예: `app/gateways/stripe.py`)\n"
+            "- 여러 파일/hunk 한 블록에 가능\n\n"
+            "예시:\n"
+            "```diff\n"
+            "--- a/app/gateways/stripe.py\n"
+            "+++ b/app/gateways/stripe.py\n"
+            "@@ -22,6 +22,7 @@ class StripeGateway:\n"
+            "         return self.client.refunds.create(charge=charge_id)\n"
+            " \n"
+            "     def charge(self, payment_method, amount):\n"
+            "+        self._ensure_client()\n"
+            "         params = {\n"
+            "             'amount': amount,\n"
+            "             'currency': 'krw',\n"
+            "```\n\n"
+            "## 2. 포스트모템 초안\n"
+            "단기 / 중기 / 장기 액션 (Defense Layer + KPI) 표 형식.\n\n"
+            "⚠️ 이 패치는 제안일 뿐이며, 개발자 승인 없이 자동 적용되지 않습니다."
         ),
-        expected_output="패치 코드 스니펫과 포스트모템 초안",
+        expected_output="(1) unified diff 코드블록 + (2) 포스트모템 초안",
         agent=fixer_agent,
         context=[analyst_task],
     )
