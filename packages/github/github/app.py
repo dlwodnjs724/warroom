@@ -1,15 +1,20 @@
 """GitHub App 기반 PR 생성 클라이언트.
 
-인증 흐름:
-    1. App ID + private key 로 JWT(RS256, 10분 TTL) 생성
-    2. POST /app/installations/{id}/access_tokens → installation token (1h TTL)
-    3. 이후 모든 REST 호출은 installation token 사용
+두 경로:
 
-PR 생성 흐름:
-    1. base branch SHA 조회
-    2. 새 ref(branch) 생성
-    3. incidents/<id>.md 파일을 PUT contents 로 commit
-    4. PR open
+1. **diff 경로** (Phase 4): patch_suggestion 에 unified diff 가 추출되면
+   GitHub Contents API 로 원본 파일 fetch → `git apply --check` 검증 →
+   tempdir 적용 → Git Data API (blob/tree/commit/ref) 로 단일 commit
+   → PR open. 변경된 코드 파일 + `incidents/<id>.md` 분석 리포트가
+   한 PR 에 함께 들어간다 (hybrid).
+
+2. **markdown 폴백** (Phase 1 호환): diff 추출/검증/적용 어디서든 실패
+   하면 기존 흐름 — `incidents/<id>.md` 만 commit 하고 PR open.
+
+인증 흐름:
+    App ID + private key → JWT(RS256, 10분 TTL)
+    → POST /app/installations/{id}/access_tokens → installation token (1h)
+    → 이후 모든 REST 호출은 installation token
 """
 
 import base64
@@ -18,12 +23,20 @@ from pathlib import Path
 
 import httpx
 import jwt
+from common.diff import apply_diff, changed_paths, extract_diff, verify_apply
 from common.models import ResolutionReport
 
 from .base import GitHubClient, PullRequestResult
 from .report import branch_name, incident_markdown, pr_body, pr_title
 
 _API = "https://api.github.com"
+
+
+class DiffApplyError(RuntimeError):
+    """unified diff 추출/검증/적용 단계에서 발생한 복구 가능한 실패.
+
+    create_patch_pr 가 이 예외를 잡으면 markdown-only 폴백 (Phase 4.4) 으로 전환.
+    """
 
 
 class GitHubAppClient(GitHubClient):
@@ -47,13 +60,88 @@ class GitHubAppClient(GitHubClient):
         repo: str,
         base_branch: str = "main",
     ) -> PullRequestResult:
-        token = self._installation_token()
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        }
+        """승인된 리포트로 PR 생성. diff 우선, 실패 시 markdown 폴백."""
+        headers = self._auth_headers()
 
+        diff = extract_diff(report.patch_suggestion)
+        if diff:
+            try:
+                return self._apply_diff_pr(report, diff, repo, base_branch, headers)
+            except DiffApplyError as e:
+                print(f"[GitHubAppClient] diff 흐름 실패, markdown 폴백: {e}")
+
+        return self._markdown_only_pr(report, repo, base_branch, headers)
+
+    # ------- diff 경로 (Phase 4.3 / 4.6) ------------------------------------
+
+    def _apply_diff_pr(
+        self,
+        report: ResolutionReport,
+        diff: str,
+        repo: str,
+        base_branch: str,
+        headers: dict,
+    ) -> PullRequestResult:
+        paths = changed_paths(diff)
+        if not paths:
+            raise DiffApplyError("diff 에 변경 파일 없음")
+
+        base_sha = self._base_sha(repo, base_branch, headers)
+
+        base_files: dict[str, str] = {}
+        for path in paths:
+            base_files[path] = self._get_file_content(repo, path, base_branch, headers)
+
+        ok, err = verify_apply(diff, base_files)
+        if not ok:
+            raise DiffApplyError(f"git apply --check 실패: {err}")
+
+        changed = apply_diff(diff, base_files)
+        if changed is None:
+            raise DiffApplyError("git apply 실패 (--check 통과했으나 본 적용 실패)")
+
+        # 4.6 hybrid — 분석 리포트 동봉
+        changed[f"incidents/{report.incident_id}.md"] = incident_markdown(report)
+
+        branch = branch_name(report)
+        base_tree = self._get_tree_sha(repo, base_sha, headers)
+
+        entries = []
+        for path, content in changed.items():
+            blob_sha = self._create_blob(repo, content, headers)
+            entries.append({"path": path, "mode": "100644", "type": "blob", "sha": blob_sha})
+
+        new_tree = self._create_tree(repo, base_tree, entries, headers)
+        commit_sha = self._create_commit(
+            repo=repo,
+            parent_sha=base_sha,
+            tree_sha=new_tree,
+            message=(
+                f"fix({report.incident_id}): AI agent unified diff 패치\n\n"
+                f"승인된 분석 리포트와 함께 commit. 변경 파일: {', '.join(paths)}"
+            ),
+            headers=headers,
+        )
+        self._create_branch(repo, branch, commit_sha, headers)
+
+        pr = self._create_pr(repo, branch, base_branch, report, headers)
+        print(f"[GitHubAppClient] diff PR 생성 완료: {pr['html_url']} (변경 {len(paths)} 파일)")
+        return PullRequestResult(
+            pr_url=pr["html_url"],
+            pr_number=pr["number"],
+            branch=branch,
+            dry_run=False,
+        )
+
+    # ------- markdown-only 폴백 (Phase 1 호환) -------------------------------
+
+    def _markdown_only_pr(
+        self,
+        report: ResolutionReport,
+        repo: str,
+        base_branch: str,
+        headers: dict,
+    ) -> PullRequestResult:
         base_sha = self._base_sha(repo, base_branch, headers)
         branch = branch_name(report)
         self._create_branch(repo, branch, base_sha, headers)
@@ -67,7 +155,7 @@ class GitHubAppClient(GitHubClient):
         )
         pr = self._create_pr(repo, branch, base_branch, report, headers)
 
-        print(f"[GitHubAppClient] PR 생성 완료: {pr['html_url']}")
+        print(f"[GitHubAppClient] markdown PR 생성 완료: {pr['html_url']}")
         return PullRequestResult(
             pr_url=pr["html_url"],
             pr_number=pr["number"],
@@ -75,8 +163,17 @@ class GitHubAppClient(GitHubClient):
             dry_run=False,
         )
 
+    # ------- auth ------------------------------------------------------------
+
+    def _auth_headers(self) -> dict:
+        token = self._installation_token()
+        return {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+
     def _installation_token(self) -> str:
-        # 50초 여유로 캐시
         if self._token and time.time() < self._token_exp - 50:
             return self._token
 
@@ -94,14 +191,75 @@ class GitHubAppClient(GitHubClient):
         resp.raise_for_status()
         data = resp.json()
         self._token = data["token"]
-        # expires_at 은 ISO 문자열이지만 1시간 고정이므로 단순 처리
         self._token_exp = time.time() + 3600
         return self._token
+
+    # ------- low-level REST helpers ------------------------------------------
 
     def _base_sha(self, repo: str, branch: str, headers: dict) -> str:
         resp = self._http.get(f"{_API}/repos/{repo}/git/ref/heads/{branch}", headers=headers)
         resp.raise_for_status()
         return resp.json()["object"]["sha"]
+
+    def _get_file_content(self, repo: str, path: str, ref: str, headers: dict) -> str:
+        resp = self._http.get(
+            f"{_API}/repos/{repo}/contents/{path}?ref={ref}",
+            headers=headers,
+        )
+        if resp.status_code == 404:
+            return ""  # 신규 파일
+        resp.raise_for_status()
+        data = resp.json()
+        return base64.b64decode(data["content"]).decode("utf-8")
+
+    def _get_tree_sha(self, repo: str, commit_sha: str, headers: dict) -> str:
+        resp = self._http.get(
+            f"{_API}/repos/{repo}/git/commits/{commit_sha}",
+            headers=headers,
+        )
+        resp.raise_for_status()
+        return resp.json()["tree"]["sha"]
+
+    def _create_blob(self, repo: str, content: str, headers: dict) -> str:
+        encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+        resp = self._http.post(
+            f"{_API}/repos/{repo}/git/blobs",
+            headers=headers,
+            json={"content": encoded, "encoding": "base64"},
+        )
+        resp.raise_for_status()
+        return resp.json()["sha"]
+
+    def _create_tree(
+        self,
+        repo: str,
+        base_tree: str,
+        entries: list[dict],
+        headers: dict,
+    ) -> str:
+        resp = self._http.post(
+            f"{_API}/repos/{repo}/git/trees",
+            headers=headers,
+            json={"base_tree": base_tree, "tree": entries},
+        )
+        resp.raise_for_status()
+        return resp.json()["sha"]
+
+    def _create_commit(
+        self,
+        repo: str,
+        parent_sha: str,
+        tree_sha: str,
+        message: str,
+        headers: dict,
+    ) -> str:
+        resp = self._http.post(
+            f"{_API}/repos/{repo}/git/commits",
+            headers=headers,
+            json={"message": message, "tree": tree_sha, "parents": [parent_sha]},
+        )
+        resp.raise_for_status()
+        return resp.json()["sha"]
 
     def _create_branch(self, repo: str, branch: str, sha: str, headers: dict) -> None:
         resp = self._http.post(

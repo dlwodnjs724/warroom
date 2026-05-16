@@ -185,6 +185,156 @@ class TestAppClient:
         assert "charge() 에서 customer null 검증 누락" in pr_body["body"]
         assert pr_body["base"] == "main"
 
+    def test_apply_diff_pr_uses_git_data_api(self, tmp_path, monkeypatch):
+        """patch_suggestion 에 unified diff 가 있으면 Git Data API 로 단일 commit."""
+        monkeypatch.setattr("github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")
+        pem = tmp_path / "key.pem"
+        pem.write_text(_FAKE_KEY)
+
+        diff_report = ResolutionReport(
+            incident_id="INC-DIFF-001",
+            severity=Severity.HIGH,
+            triage_summary="결제 NPE",
+            root_cause="charge() lazy init 누락",
+            patch_suggestion=(
+                "```diff\n"
+                "--- a/foo.py\n"
+                "+++ b/foo.py\n"
+                "@@ -1,3 +1,4 @@\n"
+                " line1\n"
+                "+inserted\n"
+                " line2\n"
+                " line3\n"
+                "```"
+            ),
+            post_mortem_draft="단/중/장기",
+            is_approved=True,
+            created_at=datetime(2026, 5, 16, 9, 0, 0, tzinfo=APP_TZ),
+        )
+
+        base_content_b64 = base64.b64encode(b"line1\nline2\nline3\n").decode("ascii")
+
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_install_token"}),  # install token
+                FakeResponse(payload={"object": {"sha": "base-sha"}}),  # base ref
+                FakeResponse(payload={"content": base_content_b64}),  # GET contents foo.py
+                FakeResponse(payload={"tree": {"sha": "base-tree"}}),  # GET commit
+                FakeResponse(payload={"sha": "blob-foo"}),  # POST blob foo.py
+                FakeResponse(payload={"sha": "blob-md"}),  # POST blob incidents/*.md
+                FakeResponse(payload={"sha": "new-tree"}),  # POST tree
+                FakeResponse(payload={"sha": "new-commit"}),  # POST commit
+                FakeResponse(payload={}),  # POST refs (branch)
+                FakeResponse(
+                    payload={
+                        "html_url": "https://github.com/toby/demo/pull/99",
+                        "number": 99,
+                    }
+                ),  # POST pulls
+            ]
+        )
+        client = GitHubAppClient(
+            app_id="999",
+            private_key_path=str(pem),
+            installation_id="123",
+            http_client=http,
+        )
+        result = client.create_patch_pr(diff_report, repo="toby/demo")
+
+        assert result.pr_number == 99
+        assert result.pr_url == "https://github.com/toby/demo/pull/99"
+        assert result.dry_run is False
+
+        methods_urls = [(m, u.split("?")[0]) for m, u, _, _ in http.calls]
+        assert methods_urls == [
+            ("POST", "https://api.github.com/app/installations/123/access_tokens"),
+            ("GET", "https://api.github.com/repos/toby/demo/git/ref/heads/main"),
+            ("GET", "https://api.github.com/repos/toby/demo/contents/foo.py"),
+            ("GET", "https://api.github.com/repos/toby/demo/git/commits/base-sha"),
+            ("POST", "https://api.github.com/repos/toby/demo/git/blobs"),
+            ("POST", "https://api.github.com/repos/toby/demo/git/blobs"),
+            ("POST", "https://api.github.com/repos/toby/demo/git/trees"),
+            ("POST", "https://api.github.com/repos/toby/demo/git/commits"),
+            ("POST", "https://api.github.com/repos/toby/demo/git/refs"),
+            ("POST", "https://api.github.com/repos/toby/demo/pulls"),
+        ]
+
+        # blob 컨텐츠가 redact 된 변경 후 파일을 담는지 sanity
+        _, _, _, blob_body = http.calls[4]
+        decoded = base64.b64decode(blob_body["content"]).decode("utf-8")
+        assert decoded == "line1\ninserted\nline2\nline3\n"
+
+        # tree 가 두 항목 (foo.py + incidents/*.md) 을 base_tree 위에 쌓는지
+        _, _, _, tree_body = http.calls[6]
+        assert tree_body["base_tree"] == "base-tree"
+        paths_in_tree = sorted(entry["path"] for entry in tree_body["tree"])
+        assert paths_in_tree == ["foo.py", "incidents/INC-DIFF-001.md"]
+
+        # branch ref 가 새 commit 을 가리키는지
+        _, _, _, ref_body = http.calls[8]
+        assert ref_body["sha"] == "new-commit"
+        assert ref_body["ref"].startswith("refs/heads/warroom/incident-INC-DIFF-001-")
+
+    def test_falls_back_to_markdown_when_diff_apply_fails(self, tmp_path, monkeypatch):
+        """diff 가 base content 와 매치 안 되면 DiffApplyError → markdown 폴백."""
+        monkeypatch.setattr("github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")
+        pem = tmp_path / "key.pem"
+        pem.write_text(_FAKE_KEY)
+
+        bad_diff_report = ResolutionReport(
+            incident_id="INC-BAD-001",
+            severity=Severity.MEDIUM,
+            triage_summary="t",
+            root_cause="r",
+            patch_suggestion=(
+                "```diff\n"
+                "--- a/foo.py\n"
+                "+++ b/foo.py\n"
+                "@@ -1,2 +1,3 @@\n"
+                " expected_context\n"
+                "+inserted\n"
+                " other_context\n"
+                "```"
+            ),
+            post_mortem_draft="p",
+            is_approved=True,
+            created_at=datetime(2026, 5, 16, 9, 0, 0, tzinfo=APP_TZ),
+        )
+
+        # base 파일 컨텐츠가 diff context 와 전혀 다름 → verify_apply 실패
+        wrong_b64 = base64.b64encode(b"completely different\nlines here\n").decode("ascii")
+
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_install_token"}),  # install token
+                FakeResponse(payload={"object": {"sha": "base-sha"}}),  # base ref (diff 경로)
+                FakeResponse(payload={"content": wrong_b64}),  # GET contents → mismatch
+                # 여기서 DiffApplyError → markdown 폴백
+                FakeResponse(payload={"object": {"sha": "base-sha"}}),  # base ref (md 경로 재호출)
+                FakeResponse(payload={}),  # POST refs
+                FakeResponse(payload={}),  # PUT contents
+                FakeResponse(
+                    payload={"html_url": "https://github.com/toby/demo/pull/77", "number": 77}
+                ),  # POST pulls
+            ]
+        )
+        client = GitHubAppClient(
+            app_id="999",
+            private_key_path=str(pem),
+            installation_id="123",
+            http_client=http,
+        )
+        result = client.create_patch_pr(bad_diff_report, repo="toby/demo")
+
+        assert result.pr_number == 77
+
+        urls = [u.split("?")[0] for _, u, _, _ in http.calls]
+        # diff 경로 GET 3개 → markdown 폴백 GET/POST refs/PUT contents/POST pulls
+        assert "https://api.github.com/repos/toby/demo/git/trees" not in urls
+        assert "https://api.github.com/repos/toby/demo/git/blobs" not in urls
+        # markdown 폴백이 PUT contents/incidents 로 떨어졌는지
+        assert any("contents/incidents/INC-BAD-001.md" in u for _, u, _, _ in http.calls)
+
     def test_token_is_cached_across_calls(self, report, tmp_path, monkeypatch):
         monkeypatch.setattr("github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")
         pem = tmp_path / "key.pem"
