@@ -91,6 +91,25 @@ class IncidentRepository:
                 return None
             return incident.slack_channel_id, incident.slack_ts
 
+    async def set_pr_info(self, incident_id: str, pr_number: int, branch: str) -> None:
+        """승인 후 생성된 PR 의 (번호, 브랜치) 영속화. 반려 시 cleanup 에 사용."""
+        sf = get_session_factory()
+        async with sf() as s:
+            incident = await s.get(Incident, incident_id)
+            if not incident:
+                return
+            incident.pr_number = pr_number
+            incident.pr_branch = branch
+            await s.commit()
+
+    async def get_pr_info(self, incident_id: str) -> tuple[int, str] | None:
+        sf = get_session_factory()
+        async with sf() as s:
+            incident = await s.get(Incident, incident_id)
+            if not incident or incident.pr_number is None or not incident.pr_branch:
+                return None
+            return incident.pr_number, incident.pr_branch
+
     async def save_report(self, incident_id: str, report: ResolutionReport) -> None:
         sf = get_session_factory()
         async with sf() as s:
@@ -149,6 +168,8 @@ def _incident_to_dict(incident: Incident, report: Report | None) -> dict:
         "dupe_count": incident.dupe_count,
         "slack_channel_id": incident.slack_channel_id,
         "slack_ts": incident.slack_ts,
+        "pr_number": incident.pr_number,
+        "pr_branch": incident.pr_branch,
         "report": _report_to_dict(report) if report else None,
     }
 

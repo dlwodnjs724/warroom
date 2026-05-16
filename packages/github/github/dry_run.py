@@ -56,3 +56,13 @@ class DryRunGitHubClient(GitHubClient):
         url = f"dry-run://github/{repo}/pull?branch={branch}"
         print(f"[GitHubClient:dry-run] {repo} ← PR 페이로드 기록 (md: {md_path})")
         return PullRequestResult(pr_url=url, pr_number=None, branch=branch, dry_run=True)
+
+    def close_pr(self, repo: str, pr_number: int, branch: str) -> None:
+        """dry-run — close 의도를 페이로드 로그에 append 한다."""
+        payload = {"action": "close_pr", "repo": repo, "pr_number": pr_number, "branch": branch}
+        self._payload_log.parent.mkdir(parents=True, exist_ok=True)
+        with self._payload_log.open("a", encoding="utf-8") as f:
+            import json as _json
+
+            f.write(_json.dumps(payload, ensure_ascii=False) + "\n")
+        print(f"[GitHubClient:dry-run] {repo} close_pr #{pr_number} branch={branch}")

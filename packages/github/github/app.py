@@ -306,3 +306,23 @@ class GitHubAppClient(GitHubClient):
         )
         resp.raise_for_status()
         return resp.json()
+
+    def close_pr(self, repo: str, pr_number: int, branch: str) -> None:
+        """PR close + branch 삭제. 멱등 — 404 / 이미 닫힘은 silent skip."""
+        headers = self._auth_headers()
+        close_resp = self._http.patch(
+            f"{_API}/repos/{repo}/pulls/{pr_number}",
+            headers=headers,
+            json={"state": "closed"},
+        )
+        if close_resp.status_code not in (200, 404, 422):
+            close_resp.raise_for_status()
+
+        del_resp = self._http.delete(
+            f"{_API}/repos/{repo}/git/refs/heads/{branch}",
+            headers=headers,
+        )
+        if del_resp.status_code not in (204, 404, 422):
+            del_resp.raise_for_status()
+
+        print(f"[GitHubAppClient] PR #{pr_number} closed + branch {branch} 삭제")
