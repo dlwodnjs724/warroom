@@ -24,11 +24,12 @@ from urllib.parse import quote
 
 import httpx
 import jwt
-from common.diff import apply_diff, changed_paths, extract_diff, is_new_file, verify_apply
+from common.diff import changed_paths, extract_diff, is_new_file
 from common.models import ResolutionReport
 from common.redact import redact_secrets
 
 from .base import GitHubClient, PullRequestResult
+from .patch import apply_diff, verify_apply
 from .report import branch_name, incident_markdown, pr_body, pr_title
 
 _API = "https://api.github.com"
