@@ -34,3 +34,11 @@ uv run demo.py         # CLI
 | 🏗️ | build | 구조 변경 |
 
 scope: `common` `gateway` `orchestrator` `chatops` `github`
+
+**Co-Authored-By 트레일러**: AI assistant (Claude) 가 작성/공동 작성한 commit 은 message 마지막 줄에 트레일러 추가.
+
+```
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+```
+
+목적: attribution 추적 + 추후 `git log --invert-grep="Co-Authored-By: Claude"` 로 사람-only commit 만 필터링 가능. 사람만 작성한 commit 에는 붙이지 말 것.
