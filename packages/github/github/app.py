@@ -23,7 +23,7 @@ from pathlib import Path
 
 import httpx
 import jwt
-from common.diff import apply_diff, changed_paths, extract_diff, verify_apply
+from common.diff import apply_diff, changed_paths, extract_diff, is_new_file, verify_apply
 from common.models import ResolutionReport
 
 from .base import GitHubClient, PullRequestResult
@@ -88,9 +88,17 @@ class GitHubAppClient(GitHubClient):
 
         base_sha = self._base_sha(repo, base_branch, headers)
 
+        # 신규 파일 (--- /dev/null) 은 base_files 에서 제외 — pre-materialize 하면
+        # git apply 가 "파일 이미 존재" 로 실패한다. apply_diff 가 git apply 가
+        # 생성한 결과 파일을 그대로 결과 dict 에 포함시킨다.
         base_files: dict[str, str] = {}
         for path in paths:
-            base_files[path] = self._get_file_content(repo, path, base_branch, headers)
+            if is_new_file(diff, path):
+                continue
+            try:
+                base_files[path] = self._get_file_content(repo, path, base_branch, headers)
+            except FileNotFoundError as e:
+                raise DiffApplyError(f"base 파일 없음 ({base_branch}): {e}") from None
 
         ok, err = verify_apply(diff, base_files)
         if not ok:
@@ -202,12 +210,18 @@ class GitHubAppClient(GitHubClient):
         return resp.json()["object"]["sha"]
 
     def _get_file_content(self, repo: str, path: str, ref: str, headers: dict) -> str:
+        """기존 파일의 raw 내용 fetch. 404 면 FileNotFoundError.
+
+        신규 파일 케이스 (--- /dev/null) 는 호출자가 is_new_file() 로 사전
+        분기해 이 메서드를 우회해야 한다. 호출되어 404 가 떨어졌다는 것은
+        diff 가 가리키는 base 파일이 실제로는 없다는 의미 → DiffApplyError.
+        """
         resp = self._http.get(
             f"{_API}/repos/{repo}/contents/{path}?ref={ref}",
             headers=headers,
         )
         if resp.status_code == 404:
-            return ""  # 신규 파일
+            raise FileNotFoundError(path)
         resp.raise_for_status()
         data = resp.json()
         return base64.b64decode(data["content"]).decode("utf-8")

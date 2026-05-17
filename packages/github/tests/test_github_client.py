@@ -343,6 +343,119 @@ class TestAppClient:
         # markdown 폴백이 PUT contents/incidents 로 떨어졌는지
         assert any("contents/incidents/INC-BAD-001.md" in u for _, u, _, _ in http.calls)
 
+    def test_apply_diff_pr_new_file_skips_base_fetch(self, tmp_path, monkeypatch):
+        """신규 파일 (--- /dev/null) 케이스 — GET contents 안 부르고 git apply 가 생성."""
+        monkeypatch.setattr("github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")
+        pem = tmp_path / "key.pem"
+        pem.write_text(_FAKE_KEY)
+
+        new_file_report = ResolutionReport(
+            incident_id="INC-NEW-001",
+            severity=Severity.MEDIUM,
+            triage_summary="t",
+            root_cause="r",
+            patch_suggestion=(
+                "```diff\n"
+                "--- /dev/null\n"
+                "+++ b/app/new_module.py\n"
+                "@@ -0,0 +1,2 @@\n"
+                "+def hello():\n"
+                '+    return "world"\n'
+                "```"
+            ),
+            post_mortem_draft="pm",
+            is_approved=True,
+            created_at=datetime(2026, 5, 17, 9, 0, 0, tzinfo=APP_TZ),
+        )
+
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_install"}),  # install
+                FakeResponse(payload={"object": {"sha": "base-sha"}}),  # base ref
+                # GET contents 호출이 여기 없어야 한다 (신규파일 = base 없음)
+                FakeResponse(payload={"tree": {"sha": "base-tree"}}),  # GET commit
+                FakeResponse(payload={"sha": "blob-new"}),  # POST blob new_module.py
+                FakeResponse(payload={"sha": "blob-md"}),  # POST blob incidents/*.md
+                FakeResponse(payload={"sha": "new-tree"}),  # POST tree
+                FakeResponse(payload={"sha": "new-commit"}),  # POST commit
+                FakeResponse(payload={}),  # POST refs
+                FakeResponse(
+                    payload={"html_url": "https://github.com/toby/demo/pull/55", "number": 55}
+                ),  # POST pulls
+            ]
+        )
+        client = GitHubAppClient(
+            app_id="999",
+            private_key_path=str(pem),
+            installation_id="123",
+            http_client=http,
+        )
+        result = client.create_patch_pr(new_file_report, repo="toby/demo")
+
+        assert result.pr_number == 55
+
+        # 신규 파일이므로 GET contents 호출이 없어야 한다
+        contents_gets = [c for c in http.calls if c[0] == "GET" and "/contents/" in c[1]]
+        assert contents_gets == []
+
+        # tree 에 신규 파일 + 분석 리포트만 (base 파일 fetch 없음에도 새 파일이 commit 됨)
+        _, _, _, tree_body = http.calls[5]
+        paths_in_tree = sorted(entry["path"] for entry in tree_body["tree"])
+        assert paths_in_tree == ["app/new_module.py", "incidents/INC-NEW-001.md"]
+
+    def test_apply_diff_pr_falls_back_when_base_file_404(self, tmp_path, monkeypatch):
+        """diff 가 기존 파일을 가리키는데 GitHub 에 그 파일이 없으면 DiffApplyError → markdown 폴백."""
+        monkeypatch.setattr("github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")
+        pem = tmp_path / "key.pem"
+        pem.write_text(_FAKE_KEY)
+
+        missing_report = ResolutionReport(
+            incident_id="INC-MISSING-001",
+            severity=Severity.HIGH,
+            triage_summary="t",
+            root_cause="r",
+            patch_suggestion=(
+                "```diff\n"
+                "--- a/app/nonexistent.py\n"
+                "+++ b/app/nonexistent.py\n"
+                "@@ -1 +1,2 @@\n"
+                " line\n"
+                "+added\n"
+                "```"
+            ),
+            post_mortem_draft="pm",
+            is_approved=True,
+            created_at=datetime(2026, 5, 17, 9, 0, 0, tzinfo=APP_TZ),
+        )
+
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_install"}),
+                FakeResponse(payload={"object": {"sha": "base-sha"}}),  # base ref (diff)
+                FakeResponse(status_code=404, payload={}),  # GET contents → 404
+                # DiffApplyError → markdown 폴백
+                FakeResponse(payload={"object": {"sha": "base-sha"}}),  # base ref (md)
+                FakeResponse(payload={}),  # POST refs
+                FakeResponse(payload={}),  # PUT contents
+                FakeResponse(payload={"html_url": "https://github.com/toby/demo/pull/88", "number": 88}),
+            ]
+        )
+        client = GitHubAppClient(
+            app_id="999",
+            private_key_path=str(pem),
+            installation_id="123",
+            http_client=http,
+        )
+        result = client.create_patch_pr(missing_report, repo="toby/demo")
+
+        assert result.pr_number == 88
+        urls = [u.split("?")[0] for _, u, _, _ in http.calls]
+        # diff 경로가 Git Data API (blobs/trees/commits) 까지 못 갔는지
+        assert not any("/git/blobs" in u for u in urls)
+        assert not any("/git/trees" in u for u in urls)
+        # markdown 폴백 흔적 — PUT contents 가 떨어졌는지
+        assert any("contents/incidents/INC-MISSING-001.md" in u for _, u, _, _ in http.calls)
+
     def test_close_pr_patches_then_deletes_branch(self, tmp_path, monkeypatch):
         monkeypatch.setattr("github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")
         pem = tmp_path / "key.pem"

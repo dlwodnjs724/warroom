@@ -1,6 +1,6 @@
 """common.diff helper 단위 테스트."""
 
-from common.diff import apply_diff, changed_paths, extract_diff, verify_apply
+from common.diff import apply_diff, changed_paths, extract_diff, is_new_file, verify_apply
 
 
 class TestExtractDiff:
@@ -43,6 +43,21 @@ class TestExtractDiff:
         # ```python 펜스는 diff 가 아니므로 무시. 안에 --- 가 있어도.
         text = "```python\ndef foo():\n    return 1\n```"
         assert extract_diff(text) is None
+
+    def test_prose_with_dash_dash_dash_rejected(self):
+        """본문에 `--- a/foo.py` 같은 표현만 있고 hunk 헤더 없으면 raw diff 로 인식 안 함."""
+        text = (
+            "분석 결과 `--- a/app/foo.py` 의 91번 라인이 의심됩니다.\n"
+            "그리고 `+++ b/app/foo.py` 에서 검토를 권장합니다.\n"
+            "(hunk 헤더 @@ 가 없으니 실제 diff 가 아님)"
+        )
+        assert extract_diff(text) is None
+
+    def test_raw_diff_with_valid_hunk_accepted(self):
+        text = "잡담\n--- a/foo.py\n+++ b/foo.py\n@@ -1,2 +1,3 @@\n line1\n+inserted\n line2\n"
+        result = extract_diff(text)
+        assert result is not None
+        assert "@@" in result
 
     def test_picks_first_valid_fenced_block(self):
         text = (
@@ -105,6 +120,28 @@ class TestVerifyApply:
         diff = "--- a/missing.txt\n+++ b/missing.txt\n@@ -1 +1 @@\n-a\n+b\n"
         ok, _ = verify_apply(diff, {})
         assert not ok
+
+
+class TestIsNewFile:
+    def test_dev_null_source_is_new(self):
+        diff = "--- /dev/null\n+++ b/new.py\n@@ -0,0 +1 @@\n+hello"
+        assert is_new_file(diff, "new.py") is True
+
+    def test_existing_source_is_not_new(self):
+        diff = "--- a/foo.py\n+++ b/foo.py\n@@ -1 +1 @@\n-a\n+b"
+        assert is_new_file(diff, "foo.py") is False
+
+    def test_missing_target_returns_false(self):
+        diff = "--- a/foo.py\n+++ b/foo.py\n@@ -1 +1 @@\n-a\n+b"
+        assert is_new_file(diff, "other.py") is False
+
+    def test_multi_file_only_one_is_new(self):
+        diff = (
+            "--- a/existing.py\n+++ b/existing.py\n@@ -1 +1 @@\n-a\n+b\n"
+            "--- /dev/null\n+++ b/created.py\n@@ -0,0 +1 @@\n+hello"
+        )
+        assert is_new_file(diff, "existing.py") is False
+        assert is_new_file(diff, "created.py") is True
 
 
 class TestApplyDiff:
