@@ -5,10 +5,17 @@ from common.redact import redact_secrets
 
 class TestRedactSecrets:
     def test_openai_key(self):
-        text = "OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz1234567890"
+        # 실 OpenAI 키는 sk-[A-Za-z0-9]{48} — 본체에 하이픈/언더스코어 없음.
+        text = "OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL12345678"
         result = redact_secrets(text)
-        assert "sk-abcdefghijklmnopqrstuvwxyz1234567890" not in result
+        assert "sk-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL12345678" not in result
         assert "[REDACTED:openai_api_key]" in result
+
+    def test_openai_pattern_does_not_match_prose_identifier(self):
+        # 본체에 하이픈 포함된 평범한 식별자는 매칭 안 됨 (false positive 차단)
+        text = "deploy target: sk-prod-deployment-canary-v2-9999"
+        result = redact_secrets(text)
+        assert "[REDACTED" not in result
 
     def test_anthropic_key_more_specific(self):
         text = "ANTHROPIC=sk-ant-api03-abcdefghijklmnopqrstuv"
@@ -63,7 +70,10 @@ class TestRedactSecrets:
         assert "before" in result and "after" in result
 
     def test_multiple_patterns_in_one_text(self):
-        text = "key1=sk-abcdefghijklmnopqrstuvwxyz1234567890 and pat=ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        text = (
+            "key1=sk-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL12345678 "
+            "and pat=ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        )
         result = redact_secrets(text)
         assert "[REDACTED:openai_api_key]" in result
         assert "[REDACTED:github_pat]" in result
@@ -77,7 +87,9 @@ class TestRedactSecrets:
 
     def test_within_code_block(self):
         # 가장 흔한 케이스 — LLM 이 예시 코드에 진짜 token 박는 경우
-        text = "```python\nclient = OpenAI(api_key='sk-realonetenchars01234567890')\n```"
+        text = (
+            "```python\n" "client = OpenAI(api_key='sk-realonetencharsABCDEFGHIJKL0123456789012345')\n" "```"
+        )
         result = redact_secrets(text)
-        assert "sk-realonetenchars01234567890" not in result
+        assert "sk-realonetencharsABCDEFGHIJKL0123456789012345" not in result
         assert "[REDACTED:openai_api_key]" in result

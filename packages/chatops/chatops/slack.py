@@ -26,6 +26,7 @@ from pathlib import Path
 
 import httpx
 from common.models import IncidentEvent, ResolutionReport
+from common.redact import redact_secrets
 
 from .base import Notifier
 
@@ -228,7 +229,9 @@ class SlackNotifier(Notifier):
         sev = report.severity.value.upper()
         emoji = _SEV_EMOJI.get(sev, "")
         rca = _truncate(report.root_cause, _RCA_LIMIT)
-        patch = _truncate(report.patch_suggestion, _PATCH_LIMIT)
+        # patch_suggestion 은 ResolutionReport 에 raw 로 저장 → Slack 노출 직전 redact.
+        # (orchestrator 가 patch 만 redact 안 한 이유: diff hunk 카운트 보존)
+        patch = _truncate(redact_secrets(report.patch_suggestion), _PATCH_LIMIT)
 
         blocks: list[dict] = [
             {

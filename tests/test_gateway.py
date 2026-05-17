@@ -205,6 +205,39 @@ class TestRejectPrCleanup:
         pr_info = await repo.get_pr_info(incident_id)
         assert pr_info is None  # dry-run 은 pr_number 없음
 
+    async def test_approve_pr_persist_failure_surfaces_warning(self, client, monkeypatch):
+        """set_pr_info 실패해도 PR 자체는 성공 → endpoint 정상 응답 + warning."""
+        from gateway.infrastructure.db.repository import IncidentRepository
+
+        monkeypatch.setenv("GITHUB_REPO", "owner/demo")
+        incident_id = await self._seed_awaiting("INC-PERSIST-FAIL-1")
+
+        # _open_pr 가 실 PR 번호/브랜치를 돌려줄 수 있게 mock
+        from gateway.services import decisions as dec_mod
+
+        def fake_open_pr(entry):
+            return {
+                "url": "https://github.com/owner/demo/pull/77",
+                "branch": "warroom/incident-X",
+                "number": 77,
+                "dry_run": False,
+            }
+
+        monkeypatch.setattr(dec_mod, "_open_pr", fake_open_pr)
+
+        # set_pr_info 가 transient DB 에러로 실패
+        async def boom(self, *args, **kwargs):
+            raise RuntimeError("DB write failed")
+
+        monkeypatch.setattr(IncidentRepository, "set_pr_info", boom)
+
+        resp = client.post(f"/incidents/{incident_id}/approve")
+        assert resp.status_code == 200
+        body = resp.json()
+        # PR 정보는 그대로 응답에 + warning 노출
+        assert body["pull_request"]["number"] == 77
+        assert "pr_persist_warning" in body["pull_request"]
+
 
 class TestWebhookSignatureVerification:
     def test_sentry_rejects_invalid_signature(self, client, monkeypatch):

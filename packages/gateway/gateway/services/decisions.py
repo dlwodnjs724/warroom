@@ -35,7 +35,20 @@ async def handle_decision(incident_id: str, approved: bool) -> JSONResponse:
     if approved:
         pr_result = _open_pr(entry)
         if pr_result and isinstance(pr_result.get("number"), int) and pr_result.get("branch"):
-            await repo.set_pr_info(incident_id, pr_result["number"], pr_result["branch"])
+            # PR 은 이미 GitHub 에 만들어졌으므로 DB 영속화 실패가 endpoint
+            # 전체를 500 으로 떨어뜨리면 PR 이 고아 (DB 모르고 GitHub 만 알고
+            # 있는 상태) 가 되어 reject 시 cleanup 불가. 영속화 실패는
+            # warning 으로 surface 하고 endpoint 는 정상 응답.
+            try:
+                await repo.set_pr_info(incident_id, pr_result["number"], pr_result["branch"])
+            except Exception as e:
+                print(
+                    f"[WARROOM] PR 영속화 실패 — incident_id={incident_id} "
+                    f"pr_number={pr_result['number']} branch={pr_result['branch']}: {e}"
+                )
+                pr_result["pr_persist_warning"] = (
+                    "PR 생성 성공했으나 DB 기록 실패. 반려 시 자동 cleanup 불가 — 수동 close 필요."
+                )
         if pr_result:
             response["pull_request"] = pr_result
     else:

@@ -115,13 +115,18 @@ lazy init 패턴 도입 시 영향받는 모든 호출부를 검토하는 프로
 
     notifier.on_agent_update(event.incident_id, "Fixer Agent", "패치 코드 및 포스트모템 초안 완료.")
 
+    # patch_suggestion 은 diff 구조 (--- / +++ / @@ + / -) 가 의미 있으므로
+    # 여기서 redact 하지 않는다 — 멀티라인 PEM 패턴이 라인 카운트를 깨면
+    # hunk 헤더와 mismatch 되어 git apply 가 영구 실패한다.
+    # 대신 소비 지점 (chatops/slack, github/report, github/app blob 생성) 에서
+    # 각각 redact. 자세한 이유는 secrets.md § 3 참조.
     report = ResolutionReport(
         incident_id=event.incident_id,
         severity=Severity.HIGH,
         category=IncidentCategory.CODE,
         triage_summary=redact_secrets(triage_output),
         root_cause=redact_secrets(analyst_output),
-        patch_suggestion=redact_secrets(patch_suggestion),
+        patch_suggestion=patch_suggestion,
         post_mortem_draft=redact_secrets(postmortem),
     )
     notifier.on_resolution_ready(report)
@@ -231,13 +236,14 @@ def _run_crew_pipeline(event: IncidentEvent, notifier: Notifier) -> ResolutionRe
     fixer_output = fixer_task.output.raw if fixer_task.output else ""
     patch, postmortem = _split_fixer_output(fixer_output)
 
+    # patch 는 diff 구조 보존 위해 redact 미적용 — 소비 지점에서 처리 (위 mock 분기와 동일 이유)
     report = ResolutionReport(
         incident_id=event.incident_id,
         severity=severity,
         category=category,
         triage_summary=redact_secrets(triage_output),
         root_cause=redact_secrets(analyst_output),
-        patch_suggestion=redact_secrets(patch),
+        patch_suggestion=patch,
         post_mortem_draft=redact_secrets(postmortem),
     )
     notifier.on_resolution_ready(report)
