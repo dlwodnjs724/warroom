@@ -403,6 +403,117 @@ class TestAppClient:
         paths_in_tree = sorted(entry["path"] for entry in tree_body["tree"])
         assert paths_in_tree == ["app/new_module.py", "incidents/INC-NEW-001.md"]
 
+    def test_apply_diff_pr_redacts_final_file_content(self, tmp_path, monkeypatch):
+        """LLM 이 패치 + 라인에 토큰 박은 경우 blob commit 직전에 [REDACTED] 로 차단."""
+        monkeypatch.setattr("github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")
+        pem = tmp_path / "key.pem"
+        pem.write_text(_FAKE_KEY)
+
+        # 패치가 sk-XXX 키를 코드에 박는 시나리오 (OpenAI 키 형식 48자)
+        leak_report = ResolutionReport(
+            incident_id="INC-LEAK-001",
+            severity=Severity.HIGH,
+            triage_summary="t",
+            root_cause="r",
+            patch_suggestion=(
+                "```diff\n"
+                "--- a/cfg.py\n"
+                "+++ b/cfg.py\n"
+                "@@ -1,2 +1,3 @@\n"
+                " import os\n"
+                '+API_KEY = "sk-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL12345678"\n'
+                " VERSION = 1\n"
+                "```"
+            ),
+            post_mortem_draft="pm",
+            is_approved=True,
+            created_at=datetime(2026, 5, 17, 9, 0, 0, tzinfo=APP_TZ),
+        )
+
+        base_b64 = base64.b64encode(b"import os\nVERSION = 1\n").decode("ascii")
+
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs"}),
+                FakeResponse(payload={"object": {"sha": "base"}}),
+                FakeResponse(payload={"content": base_b64}),
+                FakeResponse(payload={"tree": {"sha": "base-tree"}}),
+                FakeResponse(payload={"sha": "blob-cfg"}),
+                FakeResponse(payload={"sha": "blob-md"}),
+                FakeResponse(payload={"sha": "new-tree"}),
+                FakeResponse(payload={"sha": "new-commit"}),
+                FakeResponse(payload={}),
+                FakeResponse(payload={"html_url": "https://x/1", "number": 1}),
+            ]
+        )
+        client = GitHubAppClient(
+            app_id="999",
+            private_key_path=str(pem),
+            installation_id="123",
+            http_client=http,
+        )
+        client.create_patch_pr(leak_report, repo="toby/demo")
+
+        # cfg.py 의 blob 컨텐츠가 redact 통과했는지
+        _, _, _, blob_body = http.calls[4]
+        decoded = base64.b64decode(blob_body["content"]).decode("utf-8")
+        assert "sk-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL12345678" not in decoded
+        assert "[REDACTED:openai_api_key]" in decoded
+
+    def test_apply_diff_pr_url_encodes_path_with_space(self, tmp_path, monkeypatch):
+        """공백/유니코드 파일 경로도 URL-encode 되어 정상 fetch."""
+        monkeypatch.setattr("github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")
+        pem = tmp_path / "key.pem"
+        pem.write_text(_FAKE_KEY)
+
+        space_path_report = ResolutionReport(
+            incident_id="INC-SPACE-001",
+            severity=Severity.MEDIUM,
+            triage_summary="t",
+            root_cause="r",
+            patch_suggestion=(
+                "```diff\n"
+                "--- a/path with space.py\n"
+                "+++ b/path with space.py\n"
+                "@@ -1 +1,2 @@\n"
+                " original\n"
+                "+added\n"
+                "```"
+            ),
+            post_mortem_draft="pm",
+            is_approved=True,
+            created_at=datetime(2026, 5, 17, 9, 0, 0, tzinfo=APP_TZ),
+        )
+        base_b64 = base64.b64encode(b"original\n").decode("ascii")
+
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs"}),
+                FakeResponse(payload={"object": {"sha": "base"}}),
+                FakeResponse(payload={"content": base_b64}),
+                FakeResponse(payload={"tree": {"sha": "bt"}}),
+                FakeResponse(payload={"sha": "b1"}),
+                FakeResponse(payload={"sha": "b2"}),
+                FakeResponse(payload={"sha": "nt"}),
+                FakeResponse(payload={"sha": "nc"}),
+                FakeResponse(payload={}),
+                FakeResponse(payload={"html_url": "https://x/1", "number": 1}),
+            ]
+        )
+        client = GitHubAppClient(
+            app_id="999",
+            private_key_path=str(pem),
+            installation_id="123",
+            http_client=http,
+        )
+        client.create_patch_pr(space_path_report, repo="toby/demo")
+
+        # GET contents URL 이 공백을 %20 으로 인코딩
+        get_urls = [u for m, u, _, _ in http.calls if m == "GET" and "/contents/" in u]
+        assert len(get_urls) == 1
+        assert "path%20with%20space.py" in get_urls[0]
+        assert " " not in get_urls[0]  # 인코딩 안 된 공백 없어야 함
+
     def test_apply_diff_pr_falls_back_when_base_file_404(self, tmp_path, monkeypatch):
         """diff 가 기존 파일을 가리키는데 GitHub 에 그 파일이 없으면 DiffApplyError → markdown 폴백."""
         monkeypatch.setattr("github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")

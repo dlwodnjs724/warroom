@@ -20,11 +20,13 @@
 import base64
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 import jwt
 from common.diff import apply_diff, changed_paths, extract_diff, is_new_file, verify_apply
 from common.models import ResolutionReport
+from common.redact import redact_secrets
 
 from .base import GitHubClient, PullRequestResult
 from .report import branch_name, incident_markdown, pr_body, pr_title
@@ -108,8 +110,13 @@ class GitHubAppClient(GitHubClient):
         if changed is None:
             raise DiffApplyError("git apply 실패 (--check 통과했으나 본 적용 실패)")
 
-        # 4.6 hybrid — 분석 리포트 동봉
+        # 4.6 hybrid — 분석 리포트 동봉 (incident_markdown 내부에서 patch redact 처리)
         changed[f"incidents/{report.incident_id}.md"] = incident_markdown(report)
+
+        # 4.7 — git history 영구 박힘 직전 마지막 단속: 변경된 모든 파일 컨텐츠를
+        # redact_secrets 로 통과. LLM 이 패치 + 라인에 token/key 박은 경우 차단.
+        # diff 본문이 아닌 최종 파일 컨텐츠 단위라 라인 카운트 영향 없음.
+        changed = {path: redact_secrets(content) for path, content in changed.items()}
 
         branch = branch_name(report)
         base_tree = self._get_tree_sha(repo, base_sha, headers)
@@ -215,9 +222,14 @@ class GitHubAppClient(GitHubClient):
         신규 파일 케이스 (--- /dev/null) 는 호출자가 is_new_file() 로 사전
         분기해 이 메서드를 우회해야 한다. 호출되어 404 가 떨어졌다는 것은
         diff 가 가리키는 base 파일이 실제로는 없다는 의미 → DiffApplyError.
+
+        path 는 URL-encode (공백/유니코드/`#` 안전 처리). 한국어 파일명, 공백
+        포함 경로도 정상 동작.
         """
+        encoded_path = quote(path, safe="/")
+        encoded_ref = quote(ref, safe="/")
         resp = self._http.get(
-            f"{_API}/repos/{repo}/contents/{path}?ref={ref}",
+            f"{_API}/repos/{repo}/contents/{encoded_path}?ref={encoded_ref}",
             headers=headers,
         )
         if resp.status_code == 404:
@@ -293,8 +305,9 @@ class GitHubAppClient(GitHubClient):
         headers: dict,
     ) -> None:
         encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+        encoded_path = quote(path, safe="/")
         resp = self._http.put(
-            f"{_API}/repos/{repo}/contents/{path}",
+            f"{_API}/repos/{repo}/contents/{encoded_path}",
             headers=headers,
             json={"message": message, "content": encoded, "branch": branch},
         )

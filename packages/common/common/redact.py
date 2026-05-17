@@ -15,8 +15,11 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
         re.compile(r"-----BEGIN [A-Z ]+PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+PRIVATE KEY-----"),
         "private_key",
     ),
+    # Anthropic 키는 sk-ant- 접두사가 충분히 특이적 → body charclass 는 관대해도 OK
     (re.compile(r"\bsk-ant-[a-zA-Z0-9_-]{20,}"), "anthropic_api_key"),
-    (re.compile(r"\bsk-[a-zA-Z0-9_-]{20,}"), "openai_api_key"),
+    # OpenAI 키 본체는 영숫자만 (`sk-[A-Za-z0-9]{48}` 가 실 포맷). 하이픈/언더스코어 허용
+    # 시 평범한 식별자 (`sk-prod-deployment-foo`) 와 URL slug 가 false positive.
+    (re.compile(r"\bsk-[A-Za-z0-9]{40,}\b"), "openai_api_key"),
     (re.compile(r"\bghp_[a-zA-Z0-9]{36}\b"), "github_pat"),
     (re.compile(r"\bghs_[a-zA-Z0-9]{36}\b"), "github_app_token"),
     (re.compile(r"\bxox[baprs]-[a-zA-Z0-9-]{10,}"), "slack_token"),
