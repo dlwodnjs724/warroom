@@ -10,10 +10,11 @@
 
 > **새 세션이 가장 먼저 볼 영역.** Phase 완료 / 우선순위 변경 시 즉시 갱신.
 
-- **마지막 완료**: gateway 패키지 layered 정리 (`api/services/infrastructure`) + `IncidentRepository` rename + `.claude/rules/layering.md` 신설 (2026-05-14)
-- **다음 1순위**: **Phase 4** — 실 코드 변경 PR (unified diff 프롬프트 + `git apply` + 폴백). 데모 임팩트 최대.
+- **마지막 완료**: **Phase 4** 머지 (PR #1, 2026-05-18) — unified diff PR + redaction + reject cleanup + 2-round 리뷰 fix. 144 tests passed, e2e 실 PR 검증 완료
+- **다음 1순위**: **Architecture follow-up** ([#2](https://github.com/dlwodnjs724/warroom/issues/2) GitHubAppClient 분해 + [#3](https://github.com/dlwodnjs724/warroom/issues/3) DI + [#4](https://github.com/dlwodnjs724/warroom/issues/4) common/diff 분리). Phase 3/6.2 진입 전 정리 권장.
 - **다음 2순위**: **Phase 3** — Slack Interactivity (Approve 버튼 핸들러)
-- **병렬 가능 (대기 중)**: Phase 6.1 (logger), Phase 6.2 (orchestrator sentry 실 API). 사용자 명시 신호 후 진행.
+- **다음 3순위**: **Phase 4.0** — Mock → Real Sentry/GitHub tool. demo 흐름은 mock 으로 작동하나 LLM 분석 품질 ↑ 필요
+- **병렬 가능 (대기 중)**: [#5](https://github.com/dlwodnjs724/warroom/issues/5) async to_thread + close_pr observability (Phase 6.1 logger 와 묶기), Phase 6.2 (orchestrator sentry 실 API)
 - **사용자 명시 deferred**: weekly report (사용자가 "리포트는 잠시 대기" 라고 함 — 신호 받을 때까지 대기)
 
 ---
