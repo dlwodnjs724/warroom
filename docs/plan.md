@@ -2,7 +2,7 @@
 
 > 장애 자동 대응 시스템의 최종 비전, 사용자 시나리오, 현재 구조에서 변경 필요한 부분, 단계별 작업 계획.
 >
-> 최초 작성: 2026-05-13 / 갱신 정책: Phase 완료 시마다 진행 상태 업데이트.
+> 최초 작성: 2026-05-13 / 최근 갱신: 2026-05-18 (Phase 4 머지) / 갱신 정책: Phase 완료 시마다 진행 상태 업데이트.
 
 ---
 
@@ -137,8 +137,8 @@ flowchart TD
 | 7 | thread_ts 보관 | 없음 | IncidentRepository 에 컬럼 추가 | `gateway/infrastructure/db/models.py` | 2.4 |
 | 8 | Slack 버튼 클릭 | 시각적으로만 존재 | `/slack/interactions` endpoint (서명 검증) | `gateway/api/slack.py` 신규 + `services/decisions.py` 재사용 | 3.2 |
 | 9 | 거절 사유 캡쳐 | 없음 | Slack modal → 사유 → 컨텍스트 주입 | gateway + orchestrator | 3.4-5 |
-| 10 | PR 내용 | `incidents/<id>.md` 분석 리포트만 | 파일 단위 코드 diff 적용 (hybrid: diff + 리포트) | `orchestrator/agents.py` prompt, `github/app.py` | 4.1-3 |
-| 11 | PR cleanup | 없음 | 거절 시 PR close + branch 삭제 | `github/app.py` | 4.4 |
+| 10 | PR 내용 | ✅ unified diff hybrid (코드 diff + `incidents/<id>.md`) | — | `common/diff.py`, `github/app.py:_apply_diff_pr` | 4.1-3 ✅ |
+| 11 | PR cleanup | ✅ 반려 시 PR close + branch 삭제 | — | `github/app.py:close_pr`, `gateway/services/decisions.py:_close_pr_if_exists` | 4.4 ✅ |
 | 12 | Incident resolved 자동 전이 | 없음 | metric 회복 확인 (범위 밖, 명시만) | architecture 문서 | 5.1 |
 
 **본 프로젝트 범위 밖 (문서에만 명시)**:
@@ -149,12 +149,14 @@ flowchart TD
 - Sentry `issue.resolved` 역방향 webhook — metric 검증으로 대체
 
 **현재 즉시 사용 가능 (변경 없이 시연 가능)**:
-- Sentry/Datadog webhook 수신, `IncidentEvent` 파싱
-- Triage/Analyst/Fixer LLM 파이프라인 (Gemini Free 검증 완료)
-- Slack outbound 메시지 (Incoming Webhook 으로 단방향)
-- GitHub App 으로 분석 리포트 PR 생성
-- HITL 승인 (HTTP `/approve` 로)
-- SQLite 인시던트 영속화, dry-run 폴백, 64개 테스트
+- Sentry/Datadog webhook 수신, 서명 검증, `IncidentEvent` 파싱, fingerprint dedupe
+- Triage/Analyst/Fixer LLM 파이프라인 + category 분기 (Gemini Free 검증 완료)
+- Slack Bot Token outbound (`chat.postMessage` + thread reply + `chat.update`)
+- GitHub App 으로 **unified diff PR** (코드 변경 + 분석 리포트 hybrid) — markdown 폴백 자동
+- 반려 시 PR close + branch 자동 삭제
+- LLM 출력 secret 패턴 redaction (9개 패턴, consumption 지점 단속)
+- HITL 승인 (HTTP `/approve` 로 — Slack 버튼은 Phase 3)
+- MySQL/SQLite 인시던트 영속화 (PR 정보 포함), dry-run 폴백, 144개 테스트
 
 ---
 
@@ -240,21 +242,25 @@ Phase 2 진입 전 long-term maintainability 정리.
 - **3.5** 사유를 store 저장 + 재분석 시 컨텍스트 주입
 - **3.6** 테스트
 
-### Phase 4 — 실 코드 변경 PR (5~7시간, 위험) ★ 다음 주 1순위
+### Phase 4 — 실 코드 변경 PR (완료, PR #1 머지 2026-05-18)
 
-**현재 한계**: PR 에 `incidents/<id>.md` (markdown 리포트) 만 추가. 실제 소스파일 변경 없음 → 리뷰어가 진짜 코드리뷰 불가. AI Agent 시연의 핵심 가치 (실 코드 PR) 가 미달성.
+**해결한 한계**: PR 에 `incidents/<id>.md` (markdown 리포트) 만 추가했던 기존 흐름을 unified diff hybrid 로 전환. 리뷰어가 GitHub UI 에서 line-by-line review 가능.
 
-**목표**: Fixer 출력을 실제 파일 diff 로 변환 → PR 에 진짜 코드 변경 노출 → 리뷰어가 GitHub UI 에서 line-by-line review 가능.
+- **4.0** ⬜ **Mock → Real tool**: `orchestrator/tools/{sentry,github}.py` 의 mock 함수 → 실 API. **Phase 6.2 로 deferred** (Phase 4 와 분리 — 현재 mock 으로도 diff 적용 흐름은 작동, 분석 품질만 영향)
+- **4.1** ✅ Fixer 프롬프트 강제 — unified diff few-shot 예시 + system prompt 명시
+- **4.2** ✅ `common/diff.py`: `extract_diff` / `changed_paths` / `is_new_file` / `verify_apply` / `apply_diff` (tempdir + `git apply --check`)
+- **4.3** ✅ Apply 흐름: base SHA → 파일 fetch → tempdir apply → blob/tree/commit/ref → PR open (Git Data API 10-call)
+- **4.4** ✅ Fallback — diff 추출/검증/적용 실패 시 `DiffApplyError` → markdown-only PR 로 폴백
+- **4.5** ✅ 반려 시 `_close_pr_if_exists` — PATCH `/pulls/{n}` + DELETE `/git/refs/heads/{branch}`, 404/422 idempotent
+- **4.6** ✅ Hybrid — `changed[f"incidents/{id}.md"] = incident_markdown(report)` 동봉
+- **4.7** ✅ Redaction — 9개 secret 패턴 (`common/redact.py`). patch_suggestion 은 diff 구조 보존 위해 consumption 지점에서 redact (Slack/PR body/incident markdown 각각, blob 생성 직전 단속)
+- **4.8** ✅ Demo repo `dlwodnjs724/warroom-demo` 에 stripe.py NPE 버그 심기 + 실 PR E2E 검증
 
-- **4.0** **Mock → Real tool**: `orchestrator/tools/{sentry,github}.py` 의 mock 함수를 실제 API 호출로 교체. Fixer 가 _어느 파일_ 을 수정할지 알려면 GitHub source lookup 이 실제로 작동해야 함 (전제 조건)
-- **4.1** Fixer 프롬프트 강제 — 출력은 **unified diff (`git apply` 가능 형식)**. system prompt 에 명시 + few-shot example
-- **4.2** 출력 파싱 + 검증 — `_extract_diff()` 로 코드블록에서 diff 추출, `git apply --check` 로 적용 가능성 사전 검증
-- **4.3** Apply 흐름: branch 생성 → 원본 파일 fetch → diff apply (in-memory) → 변경된 파일들을 PUT contents 로 commit → PR open
-- **4.4** Fallback — diff 파싱/적용 실패 시 현재 방식 (markdown 첨부) 으로 폴백, PR 본문에 "AI 가 unified diff 생성 실패 — 수동 변환 필요" 명시
-- **4.5** 거절 시 PR close + branch 삭제
-- **4.6** Hybrid: 실 코드 diff + 분석 리포트 (incidents/<id>.md) 둘 다 첨부
-- **4.7** Patch 내용 redaction — LLM 출력에 환경변수/secret 형태 토큰(`sk-`, `AKIA`, `ghp_` 등) 있으면 `[REDACTED]` 치환
-- **4.8** Demo repo (`dlwodnjs724/warroom-demo`) 에 의도된 버그 코드 (stripe.py NPE) 심기 → 실제 파일이 존재해야 diff apply 가능
+**Architecture follow-up (Phase 진입 전 정리 권장)**:
+- [#2](https://github.com/dlwodnjs724/warroom/issues/2) — `GitHubAppClient` 책임 분해 (HTTP transport ↔ PR usecase)
+- [#3](https://github.com/dlwodnjs724/warroom/issues/3) — gateway GitHub client DI (composition root + `Depends`)
+- [#4](https://github.com/dlwodnjs724/warroom/issues/4) — `common/diff.py` 분리 (pure parser ↔ subprocess apply)
+- [#5](https://github.com/dlwodnjs724/warroom/issues/5) — `_open_pr` async `to_thread` + `close_pr` observability
 
 ### Phase 5 — 문서/시연 + 정리 (1~2시간)
 
@@ -281,23 +287,25 @@ Phase 2 진입 전 long-term maintainability 정리.
 flowchart LR
     P0[Phase 0 인프라 ✅] --> P1[Phase 1 Triage ✅]
     P0 --> P2[Phase 2 Slack 송신 ✅]
-    P0 --> P4[Phase 4 코드변경PR ★다음 1순위]
+    P0 --> P4[Phase 4 코드변경PR ✅]
+    P4 --> FU[Architecture follow-up<br/>#2 #3 #4 ★다음 1순위]
     P2 --> P3[Phase 3 Interactivity]
     P1 -.시너지.-> P4
     P3 --> P5[Phase 5 문서/시연]
     P4 --> P5
-    P6[Phase 6 품질/운영성] -.병렬.-> P4
+    P6[Phase 6 품질/운영성] -.병렬.-> P3
 ```
 
 ---
 
 ## 6. 마일스톤 매핑
 
-| 마일스톤 | 범위 |
-|---|---|
-| M2b (~5/15) | Phase 0 + Phase 1 |
-| M3 (~6/5) | Phase 2 + 3 + 4 |
-| M4 (~6/21) | Phase 5 + 통합 테스트 + 시연 |
+| 마일스톤 | 범위 | 상태 |
+|---|---|---|
+| M2b | Phase 0 + Phase 1 | ✅ |
+| M3a | Phase 2 (Slack 가시성) + Phase 4 (실 코드 변경 PR) | ✅ 2026-05-18 |
+| M3b | Architecture follow-up (#2/#3/#4) + Phase 3 (Slack Interactivity) | ⬜ 진행 예정 |
+| M4 | Phase 5 (문서/시연) + 통합 테스트 + 발표 | ⬜ |
 
 ---
 
@@ -306,12 +314,14 @@ flowchart LR
 1. ✅ **Phase 1** 부터 (독립적, 안전, vision 완결성에 직접 기여)
 2. ✅ 병렬로 **Phase 0** 인프라 셋업 (사용자가 짬짬이)
 3. ✅ Phase 0 완료 후 **Phase 2** (Slack 송신 — Bot Token 셋업 1회)
-4. **Phase 4** — 실 코드 변경 PR (다음 주 1순위, 데모 임팩트 최대: "AI Agent 가 실제 코드 PR 까지")
-5. **Phase 3** — Slack Interactivity (Approve 버튼 → 자동 PR 흐름의 마지막 piece)
-6. **Phase 2.8 / 2.9** — Slack truncation thread split, 실 LLM agent 단위 thread emit (틈틈이)
-7. **Phase 5** 문서/시연 + 정리
+4. ✅ **Phase 4** — 실 코드 변경 PR (unified diff + redaction + reject cleanup, PR #1 머지)
+5. **Architecture follow-up** ([#2](https://github.com/dlwodnjs724/warroom/issues/2)/[#3](https://github.com/dlwodnjs724/warroom/issues/3)/[#4](https://github.com/dlwodnjs724/warroom/issues/4)) — cold-context agent 가 새 transport / DI / patcher 추가 위치 명확히 인지하도록 정리
+6. **Phase 3** — Slack Interactivity (Approve 버튼 → 자동 PR 흐름의 마지막 piece)
+7. **Phase 2.8 / 2.9** — Slack truncation thread split, 실 LLM agent 단위 thread emit (틈틈이)
+8. **Phase 6.2 / 4.0** — Mock → Real Sentry/GitHub tool (LLM 분석 품질 ↑)
+9. **Phase 5** 문서/시연 + 정리
 
-→ Phase 3 보다 Phase 4 우선순위가 높은 이유: 현재도 `/incidents/{id}/approve` REST 로 PR 생성 가능 (Slack 버튼 없어도 데모 시연 가능). 반면 Phase 4 없으면 PR 에 실 코드 변경 자체가 없음.
+→ Architecture follow-up 을 Phase 3/6.2 보다 먼저 두는 이유: 새 transport (Slack interactions, 실 Sentry/GitHub) 추가 시점이 임박. 책임 분해/DI 정리가 안 된 상태로 추가하면 `GitHubAppClient` 보일러플레이트가 더 굳어진다.
 
 ---
 
@@ -319,13 +329,14 @@ flowchart LR
 
 대부분은 직접 진행 (코드베이스 작음·작업 직렬·사용자 검토 루프 우선). 다음 3 지점에서만 subagent 활용:
 
-| 지점 | 이유 | 어떤 에이전트 |
-|---|---|---|
-| Phase 4.1~4.2 LLM 프롬프트 튜닝 | 출력 포맷 강제·검증이 open-ended, 수십 회 iterate 필요. main context 보호 | `general-purpose` (worktree 격리) |
-| Phase 3 완료 후 보안 리뷰 | 서명 검증·replay 방지·권한 누락 cold review 의 강점 | `general-purpose` 1회 |
-| Phase 5.4 발표자료 다듬기 | 본 작업과 독립, 병렬 가능 | `general-purpose` |
+| 지점 | 이유 | 어떤 에이전트 | 상태 |
+|---|---|---|---|
+| Phase 4.1~4.2 LLM 프롬프트 튜닝 | 출력 포맷 강제·검증이 open-ended | `general-purpose` (worktree 격리) | ✅ 미사용으로 진행 (직접 1회 통과) |
+| Phase 4 머지 직전 cold-context 리뷰 | self-review blind spot 차단 — 2-round | `general-purpose` 2회 (1차 코드 / 2차 architecture) | ✅ 완료, 5+4 findings, HIGH 4건 즉시 반영 |
+| Phase 3 완료 후 보안 리뷰 | 서명 검증·replay 방지·권한 누락 cold review 의 강점 | `general-purpose` 1회 | ⬜ Phase 3 진입 후 |
+| Phase 5.4 발표자료 다듬기 | 본 작업과 독립, 병렬 가능 | `general-purpose` | ⬜ |
 
-그 외 단계는 직접 진행. cold-start 비용·일관성 위험이 ROI 를 초과함.
+**검증된 패턴**: 큰 흐름 머지 전 cold-context sub-agent 2-round (code → architecture) 가 self-review 만으로는 못 잡는 redaction-vs-diff 충돌, DI 부재, 책임 비대 등을 잡아냄. 비용 대비 ROI 가 명확하므로 Phase 3 머지 직전에도 동일 패턴 권장.
 
 ---
 

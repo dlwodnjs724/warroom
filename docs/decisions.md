@@ -1,6 +1,6 @@
 # 프로젝트 기획 및 기술 결정 사항
 
-> 2026-04-09 최초 작성, 2026-05-14 Phase 2 (Slack) 완료 + gateway layered 정리 반영
+> 2026-04-09 최초 작성, 2026-05-18 Phase 4 (실 코드 변경 PR) 완료 반영
 
 ---
 
@@ -27,6 +27,8 @@
 | **LLM** | Anthropic Claude Sonnet 4.6 | claude-sonnet-4-6 |
 | **ChatOps** | Slack Bot Token + chat.postMessage / thread / chat.update | Phase 2 완료, Block Kit 버튼은 Phase 3 |
 | **데이터 저장** | SQLAlchemy 2.0 async + Alembic | dev/prod=MySQL (docker-compose), test/ci=in-memory SQLite. `DATABASE_URL` 한 변수로 분기 |
+| **PR 자동화** | GitHub App (JWT + installation token) + Git Data API | Phase 4 완료. unified diff hybrid (코드 + 분석 리포트), markdown 폴백, 반려 시 close + branch 삭제 |
+| **Secret 보호** | `common/redact.py` 9개 패턴 | LLM 출력 → Slack/PR body/incident markdown consumption 지점에서 redact |
 
 ---
 
@@ -59,22 +61,25 @@ Fixer Agent
 
 ### Sub-module 3: ChatOps Interface
 
-- 각 에이전트 진행 과정을 실시간 출력 (프로토타입: 콘솔, 이후: Slack Thread)
+- 각 에이전트 진행 과정을 실시간 출력 (Slack Thread reply + 콘솔 dry-run)
 - 최종 결과에 승인(Approve) / 반려(Reject) 액션 제공
-  - 승인 → 포스트모템 저장 (+ 추후 Jira 티켓 생성 확장 포인트)
-  - 반려 → 재분석 요청 (피드백 포함)
+  - 승인 → GitHub PR 자동 생성 (unified diff hybrid: 코드 변경 + 분석 리포트)
+  - 반려 → PR close + branch 삭제 (영속화된 PR 정보 있는 경우)
+  - 재분석 요청 (피드백 포함) 은 Phase 3.5 범위
 
 ---
 
 ## 프로토타입 범위 (Milestone 1)
 
-| 항목 | 현재 (2026-05-14) | 향후 확장 |
+| 항목 | 현재 (2026-05-18) | 향후 확장 |
 |------|-----------|----------|
-| 인시던트 소스 | **Sentry + Datadog** 둘 다 구현 | PagerDuty 등 추가 시 monitors/ 어댑터만 |
+| 인시던트 소스 | **Sentry + Datadog** 둘 다 구현 (서명 검증 + dedupe) | PagerDuty 등 추가 시 monitors/ 어댑터만 |
 | 외부 API Tool | **Mock** (orchestrator/tools/) | 실제 Sentry/GitHub API 교체 (Phase 6.2) |
 | ChatOps | **Slack Bot 실 송신** (thread reply + chat.update) | Block Kit 버튼 핸들러 (Phase 3) |
 | 승인/반려 | **REST + CLI** (`/incidents/{id}/approve`, demo.py y/n) | Slack Interactive Button (Phase 3) |
-| 티켓/이력 | **MySQL/SQLite (SQLAlchemy)** + 보조 JSON | Jira API 연동 |
+| GitHub PR | **unified diff hybrid PR** (코드 + 분석 리포트), 반려 시 close + branch 삭제 | architecture follow-up: client DI / responsibility 분해 ([#2](https://github.com/dlwodnjs724/warroom/issues/2)/[#3](https://github.com/dlwodnjs724/warroom/issues/3)) |
+| Secret 보호 | **9개 패턴 redaction** at consumption (Slack/PR body/incident markdown) | 패턴 확장 시 `common/redact.py` 추가 |
+| 티켓/이력 | **MySQL/SQLite (SQLAlchemy)** + 보조 JSON (`pr_number/pr_branch` 컬럼 포함) | Jira API 연동 |
 
 ---
 

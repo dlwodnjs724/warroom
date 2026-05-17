@@ -75,18 +75,28 @@ sequenceDiagram
     Svc->>Repo: status=APPROVED
     Svc->>GH: create_patch_pr(report, repo)
     GH->>GH: JWT → installation token
-    GH->>GH: base SHA → branch → file commit → PR open
+    alt unified diff 추출 가능
+        GH->>GH: file fetch → git apply --check → tempdir apply
+        GH->>GH: blob/tree/commit/ref → PR open (코드 변경 + incidents/<id>.md 동봉)
+    else 추출/검증/적용 실패
+        GH->>GH: base SHA → branch → incidents/<id>.md 단일 commit → PR open (markdown 폴백)
+    end
     GH-->>Svc: PullRequestResult
-    API-->>Dev: { pull_request: {url, branch, ...} }
+    Svc->>Repo: set_pr_info(pr_number, branch)
+    API-->>Dev: { pull_request: {url, branch, number, dry_run} }
+
+    Note over Dev,GH: 반려 시: API → Svc.handle_decision(approved=False)<br/>→ get_pr_info → GH.close_pr (PATCH /pulls + DELETE /git/refs)
 ```
 
 ## 패키지 구조
 
 ```
 packages/
-├── common/                       # 공유 모델 + 표준 시간
+├── common/                       # 공유 모델 + 표준 시간 + 보안 helper
 │   ├── models.py                 # IncidentEvent, ResolutionReport, Severity, Status (StrEnum)
-│   └── clock.py                  # APP_TZ + now() — 모든 timestamp 의 단일 소스
+│   ├── clock.py                  # APP_TZ + now() — 모든 timestamp 의 단일 소스
+│   ├── diff.py                   # extract/changed_paths/is_new_file/verify_apply/apply_diff
+│   └── redact.py                 # 9개 secret 패턴 redaction (LLM 출력 → consumption 지점)
 │
 ├── gateway/                      # Event Gateway (3-layer)
 │   ├── main.py                   # composition root — FastAPI app + lifespan + include_router
@@ -123,8 +133,10 @@ packages/
 └── github/                       # PR 자동 생성
     ├── base.py                   # GitHubClient Protocol + PullRequestResult
     ├── app.py                    # GitHub App (JWT → installation token → REST)
+    │                             #   create_patch_pr: unified diff hybrid + markdown 폴백
+    │                             #   close_pr: 반려 시 PR close + branch 삭제
     ├── dry_run.py                # 페이로드/마크다운 파일 출력 (App 미설정 시)
-    ├── report.py                 # ResolutionReport → markdown / PR title/body
+    ├── report.py                 # ResolutionReport → markdown / PR title/body (patch redact at render)
     └── factory.py                # make_github_client()
 ```
 
