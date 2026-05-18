@@ -46,6 +46,45 @@ def build_patch_pr(
     return _build_markdown_only_pr(client, report, repo, base_branch)
 
 
+def _open_pr_or_cleanup(
+    client: GitHubClient,
+    repo: str,
+    branch: str,
+    base_branch: str,
+    title: str,
+    body: str,
+) -> dict:
+    """``open_pr`` 호출 + 실패 시 orphan branch best-effort 삭제 (#7).
+
+    ``commit_files`` 가 이미 GitHub 에 branch + commit 을 만든 상태에서
+    ``open_pr`` 가 raise 하면 branch 만 남고 PR 레코드는 없는 orphan 상태.
+    이후 ``_close_pr_if_exists`` 는 DB 에 ``set_pr_info`` 가 안 된 상태라
+    cleanup 시도조차 못한다. open_pr 실패 시점에 즉시 ``delete_branch`` 로
+    회수하고, 회수마저 실패하면 운영자가 인지할 수 있게 명시 로그.
+
+    원본 예외는 그대로 re-raise — 호출자가 status_code 기반 분기 가능.
+    """
+    try:
+        return client.open_pr(
+            repo=repo,
+            branch=branch,
+            base_branch=base_branch,
+            title=title,
+            body=body,
+        )
+    except Exception as open_err:
+        try:
+            client.delete_branch(repo, branch)
+            print(f"[pr_builder] open_pr 실패 — orphan branch {branch} 정리 완료: {open_err}")
+        except Exception as cleanup_err:
+            # 운영자가 반드시 인지해야 함 — GitHub 에 orphan branch 가 남는다.
+            print(
+                f"[pr_builder][ORPHAN] open_pr 실패 + branch {branch} 정리 실패 "
+                f"(수동 삭제 필요) — open_err={open_err}, cleanup_err={cleanup_err}"
+            )
+        raise
+
+
 def _build_diff_pr(
     client: GitHubClient,
     report: ResolutionReport,
@@ -97,7 +136,8 @@ def _build_diff_pr(
         files=changed,
         message=message,
     )
-    pr = client.open_pr(
+    pr = _open_pr_or_cleanup(
+        client=client,
         repo=repo,
         branch=branch,
         base_branch=base_branch,
@@ -127,7 +167,8 @@ def _build_markdown_only_pr(
         files={f"incidents/{report.incident_id}.md": incident_markdown(report)},
         message=f"docs(incident): {report.incident_id} AI 분석 리포트",
     )
-    pr = client.open_pr(
+    pr = _open_pr_or_cleanup(
+        client=client,
         repo=repo,
         branch=branch,
         base_branch=base_branch,
