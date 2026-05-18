@@ -25,6 +25,8 @@ _API = "https://api.github.com"
 
 
 class GitHubAppClient(GitHubClient):
+    is_dry_run = False
+
     def __init__(
         self,
         app_id: str,
