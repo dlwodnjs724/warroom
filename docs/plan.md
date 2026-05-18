@@ -10,11 +10,11 @@
 
 > **새 세션이 가장 먼저 볼 영역.** Phase 완료 / 우선순위 변경 시 즉시 갱신.
 
-- **마지막 완료**: **Phase 4** 머지 (PR #1, 2026-05-18) — unified diff PR + redaction + reject cleanup + 2-round 리뷰 fix. 144 tests passed, e2e 실 PR 검증 완료
-- **다음 1순위**: **Architecture follow-up** ([#2](https://github.com/dlwodnjs724/warroom/issues/2) GitHubAppClient 분해 + [#3](https://github.com/dlwodnjs724/warroom/issues/3) DI + [#4](https://github.com/dlwodnjs724/warroom/issues/4) common/diff 분리). Phase 3/6.2 진입 전 정리 권장.
+- **마지막 완료**: **Architecture follow-up bundle** 머지 (PR #6, 2026-05-18) — #2 GitHubAppClient 분해 + #3 gateway DI + #4 common/diff 분리. cold-context 리뷰 6 findings (HIGH 1 / MEDIUM 2 즉시 반영, MEDIUM 3 → #7 분리). 149 tests pass
+- **이전 완료**: Phase 4 머지 (PR #1, 2026-05-18) — unified diff PR + redaction + reject cleanup
+- **다음 1순위**: **PR reliability bundle** ([#5](https://github.com/dlwodnjs724/warroom/issues/5) async to_thread + close_pr observability + [#7](https://github.com/dlwodnjs724/warroom/issues/7) orphan branch cleanup). 둘 다 PR transport reliability/observability 보강 — 같은 파일군 (`github/app.py` close_pr 주변 + `gateway/services/decisions.py`) 손대므로 묶어 진행
 - **다음 2순위**: **Phase 3** — Slack Interactivity (Approve 버튼 핸들러)
-- **다음 3순위**: **Phase 4.0** — Mock → Real Sentry/GitHub tool. demo 흐름은 mock 으로 작동하나 LLM 분석 품질 ↑ 필요
-- **병렬 가능 (대기 중)**: [#5](https://github.com/dlwodnjs724/warroom/issues/5) async to_thread + close_pr observability (Phase 6.1 logger 와 묶기), Phase 6.2 (orchestrator sentry 실 API)
+- **다음 3순위**: **Phase 4.0 / 6.2** — Mock → Real Sentry/GitHub tool. demo 흐름은 mock 으로 작동하나 LLM 분석 품질 ↑ 필요
 - **사용자 명시 deferred**: weekly report (사용자가 "리포트는 잠시 대기" 라고 함 — 신호 받을 때까지 대기)
 
 ---
