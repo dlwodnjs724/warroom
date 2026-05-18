@@ -2,7 +2,7 @@
 
 > 장애 자동 대응 시스템의 최종 비전, 사용자 시나리오, 현재 구조에서 변경 필요한 부분, 단계별 작업 계획.
 >
-> 최초 작성: 2026-05-13 / 최근 갱신: 2026-05-18 (Phase 4 머지) / 갱신 정책: Phase 완료 시마다 진행 상태 업데이트.
+> 최초 작성: 2026-05-13 / 최근 갱신: 2026-05-18 (Phase 3 PR 오픈) / 갱신 정책: Phase 완료 시마다 진행 상태 업데이트.
 
 ---
 
@@ -10,12 +10,12 @@
 
 > **새 세션이 가장 먼저 볼 영역.** Phase 완료 / 우선순위 변경 시 즉시 갱신.
 
-- **마지막 완료**: **Convention codify + clients/ 그룹핑** 머지 (PR #9, 2026-05-18) — github/chatops 의 client 구현을 `clients/` 디렉터리로 분리 + layering.md §4a (패키지 내부 layer) / §4b (external adapter error 계층) / §4c (composition root) 명문화 + agents.md 신설 (sub-agent + cold review workflow). 170 tests pass
-- **이전 완료**: PR reliability bundle (PR #8) — #5 async + #7 orphan cleanup. Architecture follow-up bundle (PR #6) — #2/#3/#4. Phase 4 (PR #1) — unified diff PR
+- **진행 중**: **Phase 3 (Slack Interactivity) PR 오픈 + cold review 대기** — 6 commits on `feat/phase-3-slack-interactivity`. `/slack/interactions` endpoint (block_actions + view_submission), verify_slack_signature (v0 HMAC + 5분 replay 윈도우), SlackNotifier.open_reject_modal, incidents.rejection_reason 컬럼 + Alembic, handle_decision(rejection_reason). 198 tests pass (170 → 198, +28)
+- **이전 완료**: Convention codify + clients/ 그룹핑 (PR #9). PR reliability (PR #8). Architecture follow-up (PR #6). Phase 4 (PR #1)
 - **모든 follow-up 이슈 closed**: #2 #3 #4 #5 #7 (5건). Phase 4 후속 architectural debt 정리 완료
-- **다음 1순위**: **Phase 3** — Slack Interactivity (Approve 버튼 핸들러). demo 완결성 가장 큰 임팩트
-- **다음 2순위**: **Phase 4.0 / 6.2** — Mock → Real Sentry/GitHub tool. demo 흐름은 mock 으로 작동하나 LLM 분석 품질 ↑ 필요
-- **다음 3순위**: **Phase 6.1** — `print` → `logging` 마이그레이션. `[WARROOM][cleanup]` / `[WARROOM][open_pr]` / `[pr_builder][ORPHAN]` 같은 prefix 패턴이 누적되어 logger 도입 ROI 큰 시점
+- **다음 1순위 (Phase 3 머지 후)**: **Phase 4.0 / 6.2** — Mock → Real Sentry/GitHub tool. demo 흐름은 mock 으로 작동하나 LLM 분석 품질 ↑ 필요
+- **다음 2순위**: **Phase 6.1** — `print` → `logging` 마이그레이션. `[WARROOM][cleanup]` / `[WARROOM][open_pr]` / `[WARROOM][slack]` / `[pr_builder][ORPHAN]` 같은 prefix 패턴이 누적되어 logger 도입 ROI 큰 시점
+- **Phase 3 follow-up 후보**: 재분석 요청 hook (저장된 rejection_reason 을 컨텍스트로 orchestrator 재실행) — Phase 3.5 의 "재분석 시 컨텍스트 주입" 부분, 현재 시스템에 재분석 자체가 없어 별도 이슈로 분리 예정
 - **사용자 명시 deferred**: weekly report (사용자가 "리포트는 잠시 대기" 라고 함 — 신호 받을 때까지 대기)
 
 ---
@@ -136,8 +136,8 @@ flowchart TD
 | 5 | 에이전트 진행 표시 | `on_agent_update` 가 Slack 무시 | thread reply 로 표시 | `chatops/slack.py` | 2.2 |
 | 6 | 최종 결과 메시지 | 신규 메시지 1건 | 메인 메시지 `chat.update` + 버튼 | `chatops/slack.py` | 2.3 |
 | 7 | thread_ts 보관 | 없음 | IncidentRepository 에 컬럼 추가 | `gateway/infrastructure/db/models.py` | 2.4 |
-| 8 | Slack 버튼 클릭 | 시각적으로만 존재 | `/slack/interactions` endpoint (서명 검증) | `gateway/api/slack.py` 신규 + `services/decisions.py` 재사용 | 3.2 |
-| 9 | 거절 사유 캡쳐 | 없음 | Slack modal → 사유 → 컨텍스트 주입 | gateway + orchestrator | 3.4-5 |
+| 8 | Slack 버튼 클릭 | ✅ `/slack/interactions` (block_actions) → handle_decision | — | `gateway/api/slack.py`, `services/decisions.py` | 3.2-3 ✅ |
+| 9 | 거절 사유 캡쳐 | ✅ Slack modal (views.open) → view_submission → `incidents.rejection_reason` 영속화 | 재분석 hook (재실행 시 컨텍스트 주입) — 별도 follow-up | `chatops/clients/slack.py:open_reject_modal`, `gateway/api/slack.py`, `repository.update_status` | 3.4-5 ✅ |
 | 10 | PR 내용 | ✅ unified diff hybrid (코드 diff + `incidents/<id>.md`) | — | `common/diff.py`, `github/app.py:_apply_diff_pr` | 4.1-3 ✅ |
 | 11 | PR cleanup | ✅ 반려 시 PR close + branch 삭제 | — | `github/app.py:close_pr`, `gateway/services/decisions.py:_close_pr_if_exists` | 4.4 ✅ |
 | 12 | Incident resolved 자동 전이 | 없음 | metric 회복 확인 (범위 밖, 명시만) | architecture 문서 | 5.1 |
@@ -234,14 +234,14 @@ Phase 2 진입 전 long-term maintainability 정리.
   - 드라이버 표기 inconsistency (`aiomysql` → `asyncmy`, `c2feda2`)
   - 테스트 env 누수 차단 강화 (Slack/GitHub vars, `0b6fb39`)
 
-### Phase 3 — Slack Interactivity (2~3시간)
+### Phase 3 — Slack Interactivity (PR 오픈, 2026-05-18)
 
-- **3.1** Slack App Interactivity URL 등록 (ngrok HTTPS)
-- **3.2** `/slack/interactions` endpoint + 서명 검증
-- **3.3** 버튼 클릭 → `_handle_decision` 재사용
-- **3.4** ❌ 클릭 → modal → 거절 사유 캡쳐
-- **3.5** 사유를 store 저장 + 재분석 시 컨텍스트 주입
-- **3.6** 테스트
+- **3.1** ⬜ Slack App Interactivity URL 등록 (ngrok HTTPS) — 운영 단계, 코드 변경 없음
+- **3.2** ✅ `/slack/interactions` endpoint + 서명 검증 — `gateway/api/slack.py` + `verify_slack_signature` (v0 HMAC-SHA256 + 5분 replay 윈도우)
+- **3.3** ✅ 버튼 클릭 → `handle_decision` 재사용 — block_actions 의 `warroom_approve` → BackgroundTasks (3초 룰), `warroom_reject` → modal open
+- **3.4** ✅ ❌ 클릭 → modal → 거절 사유 캡쳐 — `SlackNotifier.open_reject_modal` (callback_id `warroom_reject_modal`, private_metadata 에 incident_id), view_submission 처리
+- **3.5** ✅ 사유 영속화 — `incidents.rejection_reason` 컬럼 + Alembic `6d3aecc468a3` + `handle_decision(rejection_reason=...)`. **재분석 hook 은 별도 follow-up 으로 분리** (현재 시스템에 재분석 자체가 없음)
+- **3.6** ✅ 테스트 — verify_slack_signature 단위 7, SlackNotifier modal 3, /slack/interactions 통합 15 = +28 tests (170→198)
 
 ### Phase 4 — 실 코드 변경 PR (완료, PR #1 머지 2026-05-18)
 

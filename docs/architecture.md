@@ -70,7 +70,8 @@ sequenceDiagram
         Notif->>Dev: Slack 알림 (✅/❌ 버튼)
     end
 
-    Dev->>API: POST /incidents/{id}/approve
+    Dev->>API: Slack ✅ (block_actions warroom_approve)<br/>또는 POST /incidents/{id}/approve
+    API->>API: verify_slack_signature (interactivity 경로)
     API->>Svc: handle_decision(id, approved=True)
     Svc->>Repo: status=APPROVED
     Svc->>GH: create_patch_pr(report, repo)
@@ -85,7 +86,7 @@ sequenceDiagram
     Svc->>Repo: set_pr_info(pr_number, branch)
     API-->>Dev: { pull_request: {url, branch, number, dry_run} }
 
-    Note over Dev,GH: 반려 시: API → Svc.handle_decision(approved=False)<br/>→ get_pr_info → GH.close_pr (PATCH /pulls + DELETE /git/refs)
+    Note over Dev,GH: 반려 시: Slack ❌ → views.open modal (reason 입력)<br/>→ view_submission → handle_decision(approved=False, reason)<br/>→ get_pr_info → GH.close_pr (PATCH /pulls + DELETE /git/refs)
 ```
 
 ## 패키지 구조
