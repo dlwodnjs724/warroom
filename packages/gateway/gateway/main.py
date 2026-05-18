@@ -20,6 +20,7 @@ from gateway.api.webhooks import router as webhooks_router
 from gateway.dependencies import (
     get_github_client,
     get_github_repo,
+    get_slack_notifier,
     reset_github_client,
     reset_slack_notifier,
 )
@@ -45,8 +46,10 @@ async def lifespan(app: FastAPI):
     get_github_client()
     print(f"[WARROOM] GitHub client 초기화 (GITHUB_REPO={get_github_repo() or '미설정'})")
 
-    # Slack interactivity 전용 notifier 도 lifespan 마다 초기화 (env 갱신 반영).
+    # Slack interactivity 전용 notifier — github 패턴 동일 (reset → eager init).
+    # 미리 1회 생성해 env credential snapshot 을 lifespan boundary 에 고정한다.
     reset_slack_notifier()
+    get_slack_notifier()
 
     yield
     print("[WARROOM] Gateway 종료")

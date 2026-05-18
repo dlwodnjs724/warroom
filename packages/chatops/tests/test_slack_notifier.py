@@ -272,6 +272,10 @@ class TestRejectModal:
         rows = [json.loads(line) for line in log.read_text().splitlines()]
         assert rows[0]["_error"] == "trigger_expired"
         assert rows[0]["_api"] == "views.open"
+        # fallback 페이로드에 view 메타데이터가 보존되어야 — regression 시
+        # 어떤 incident 가 modal 시도했는지 추적 불가해진다.
+        assert rows[0]["view"]["private_metadata"] == "INC-1"
+        assert rows[0]["trigger_id"] == "trig-stale"
 
 
 class TestTruncation:

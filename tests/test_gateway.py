@@ -231,6 +231,44 @@ class TestRejectPrCleanup:
         assert entry is not None
         assert entry["rejection_reason"] is None
 
+    async def test_reject_reason_redacts_secret_patterns(self, client, monkeypatch):
+        """secrets.md § 3 — Slack 자유 입력에 API key 박혀도 DB / HTTP 응답에 raw 노출 금지."""
+        from gateway.infrastructure.db.repository import get_repository
+
+        # OpenAI 패턴은 sk- + 40+ alphanumeric (common/redact.py 참고).
+        leaked = "sk-" + "a" * 48  # 51 chars total
+        incident_id = await self._seed_awaiting("INC-REJECT-REDACT-1")
+        resp = client.post(
+            f"/incidents/{incident_id}/reject",
+            json={"rejection_reason": f"사유: {leaked} 너무 위험"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert leaked not in body["rejection_reason"]
+        assert "[REDACTED:openai_api_key]" in body["rejection_reason"]
+
+        repo = get_repository()
+        entry = await repo.get(incident_id)
+        assert entry is not None
+        assert leaked not in (entry["rejection_reason"] or "")
+
+    async def test_reject_reason_truncated_to_cap(self, client):
+        """4000자 캡 — DoS / column blowup 방지."""
+        from gateway.infrastructure.db.repository import get_repository
+
+        incident_id = await self._seed_awaiting("INC-REJECT-CAP-1")
+        long_reason = "x" * 6000
+        resp = client.post(
+            f"/incidents/{incident_id}/reject",
+            json={"rejection_reason": long_reason},
+        )
+        assert resp.status_code == 200
+
+        repo = get_repository()
+        entry = await repo.get(incident_id)
+        assert entry is not None
+        assert len(entry["rejection_reason"]) == 4000
+
     async def test_approve_persists_pr_info(self, client, monkeypatch):
         from gateway.infrastructure.db.repository import get_repository
 
