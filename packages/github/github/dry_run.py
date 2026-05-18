@@ -17,6 +17,8 @@ from .base import GitHubClient
 
 
 class DryRunGitHubClient(GitHubClient):
+    is_dry_run = True
+
     def __init__(
         self,
         payload_log: str | None = None,
@@ -80,7 +82,7 @@ class DryRunGitHubClient(GitHubClient):
         self._append_payload(payload)
         url = f"dry-run://github/{repo}/pull?branch={branch}"
         print(f"[GitHubClient:dry-run] {repo} ← PR 페이로드 기록")
-        return {"html_url": url, "number": None, "dry_run": True}
+        return {"html_url": url, "number": None}
 
     def close_pr(self, repo: str, pr_number: int, branch: str) -> None:
         payload = {"action": "close_pr", "repo": repo, "pr_number": pr_number, "branch": branch}

@@ -326,6 +326,8 @@ class FakeClient(GitHubClient):
     ``open_pr`` 호출 페이로드를 리스트에 기록한다.
     """
 
+    is_dry_run = False
+
     def __init__(self, base_files: dict[str, str] | None = None, pr_number: int = 42):
         self._base_files = base_files or {}
         self._pr_number = pr_number

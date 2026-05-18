@@ -21,6 +21,15 @@ class PullRequestResult:
 
 
 class GitHubClient(Protocol):
+    is_dry_run: bool
+    """\
+    구현이 실 GitHub 호출을 하지 않고 페이로드/파일 출력만 하는 dry-run 인지.
+
+    pr_builder 는 PullRequestResult.dry_run 을 채울 때 이 속성을 본다 — open_pr
+    return dict 에 ``dry_run`` 키를 끼워넣는 패턴은 Protocol 계약 밖이라 새 구
+    현체가 누락하기 쉽다.
+    """
+
     def get_file_content(self, repo: str, path: str, ref: str) -> str:
         """기존 파일의 raw 내용 fetch. 404 면 ``FileNotFoundError``.
 

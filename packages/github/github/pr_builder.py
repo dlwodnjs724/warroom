@@ -109,7 +109,7 @@ def _build_diff_pr(
         pr_url=pr["html_url"],
         pr_number=pr["number"],
         branch=branch,
-        dry_run=pr.get("dry_run", False),
+        dry_run=client.is_dry_run,
     )
 
 
@@ -139,5 +139,5 @@ def _build_markdown_only_pr(
         pr_url=pr["html_url"],
         pr_number=pr["number"],
         branch=branch,
-        dry_run=pr.get("dry_run", False),
+        dry_run=client.is_dry_run,
     )
