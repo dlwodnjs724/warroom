@@ -606,3 +606,99 @@ class TestPrBuilderMarkdownFallback:
         build_patch_pr(client, missing_report, repo="toby/demo")
         assert len(client.commits) == 1
         assert list(client.commits[0]["files"].keys()) == ["incidents/INC-MISSING-001.md"]
+
+
+class _CleanupRecordingClient(GitHubClient):
+    """open_pr 실패 시 delete_branch 가 호출되는지 추적하는 stub."""
+
+    is_dry_run = False
+
+    def __init__(
+        self,
+        open_pr_exc: Exception,
+        delete_branch_exc: Exception | None = None,
+        base_files: dict[str, str] | None = None,
+    ):
+        self._open_pr_exc = open_pr_exc
+        self._delete_branch_exc = delete_branch_exc
+        self._base_files = base_files or {}
+        self.commits: list[dict] = []
+        self.delete_branch_calls: list[tuple[str, str]] = []
+
+    def get_file_content(self, repo: str, path: str, ref: str) -> str:
+        if path not in self._base_files:
+            raise FileNotFoundError(path)
+        return self._base_files[path]
+
+    def commit_files(self, repo, branch, base_branch, files, message):
+        self.commits.append({"repo": repo, "branch": branch})
+
+    def open_pr(self, repo, branch, base_branch, title, body):
+        raise self._open_pr_exc
+
+    def close_pr(self, repo: str, pr_number: int, branch: str) -> None:
+        pass
+
+    def delete_branch(self, repo: str, branch: str) -> None:
+        self.delete_branch_calls.append((repo, branch))
+        if self._delete_branch_exc:
+            raise self._delete_branch_exc
+
+
+class TestPrBuilderOrphanCleanup:
+    """open_pr 실패 시 commit_files 가 만든 branch 가 orphan 으로 남지 않게 한다 (#7)."""
+
+    def test_markdown_path_deletes_branch_on_open_pr_failure(self, report):
+        boom = GitHubTransientError("502 bad gateway", 502)
+        client = _CleanupRecordingClient(open_pr_exc=boom)
+
+        with pytest.raises(GitHubTransientError):
+            build_patch_pr(client, report, repo="toby/demo")
+
+        # commit_files 는 이미 호출됨 → orphan 가능성 발생 → delete_branch 로 회수
+        assert len(client.commits) == 1
+        assert len(client.delete_branch_calls) == 1
+        cleaned_repo, cleaned_branch = client.delete_branch_calls[0]
+        assert cleaned_repo == "toby/demo"
+        assert cleaned_branch == client.commits[0]["branch"]
+
+    def test_diff_path_deletes_branch_on_open_pr_failure(self):
+        diff_report = ResolutionReport(
+            incident_id="INC-DIFF-ORPHAN",
+            severity=Severity.HIGH,
+            triage_summary="t",
+            root_cause="r",
+            patch_suggestion=(
+                "```diff\n--- a/foo.py\n+++ b/foo.py\n@@ -1,2 +1,3 @@\n line1\n+ins\n line2\n```"
+            ),
+            post_mortem_draft="pm",
+            is_approved=True,
+            created_at=datetime(2026, 5, 18, 9, 0, 0, tzinfo=APP_TZ),
+        )
+        boom = GitHubAuthError("token expired", 401)
+        client = _CleanupRecordingClient(
+            open_pr_exc=boom,
+            base_files={"foo.py": "line1\nline2\n"},
+        )
+
+        with pytest.raises(GitHubAuthError):
+            build_patch_pr(client, diff_report, repo="toby/demo")
+
+        assert len(client.delete_branch_calls) == 1
+        assert client.delete_branch_calls[0][1] == client.commits[0]["branch"]
+
+    def test_reraises_original_when_cleanup_also_fails(self, report):
+        """delete_branch 도 실패하면 둘 다 로그하고 원본 예외 re-raise."""
+        original = GitHubAuthError("403", 403)
+        cleanup_fail = GitHubTransientError("503", 503)
+        client = _CleanupRecordingClient(
+            open_pr_exc=original,
+            delete_branch_exc=cleanup_fail,
+        )
+
+        with pytest.raises(GitHubAuthError) as exc:
+            build_patch_pr(client, report, repo="toby/demo")
+        assert exc.value.status_code == 403  # 원본 예외 보존
+
+        # cleanup 도 시도는 했음
+        assert len(client.delete_branch_calls) == 1
