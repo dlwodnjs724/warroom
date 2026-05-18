@@ -19,9 +19,22 @@ from urllib.parse import quote
 import httpx
 import jwt
 
-from .base import GitHubClient
+from .base import GitHubAuthError, GitHubClient, GitHubError, GitHubTransientError
 
 _API = "https://api.github.com"
+
+
+def _classify_status(status_code: int, context: str) -> GitHubError:
+    """HTTP status → 운영 의미가 분리된 예외.
+
+    호출자는 ``GitHubAuthError`` (토큰/권한 — 재시도 무의미) 와
+    ``GitHubTransientError`` (5xx — 재시도 가치 있음) 를 구분해 surface 한다.
+    """
+    if status_code in (401, 403):
+        return GitHubAuthError(f"{context}: 인증/권한 실패 (status={status_code})", status_code)
+    if 500 <= status_code < 600:
+        return GitHubTransientError(f"{context}: GitHub 측 일시 장애 (status={status_code})", status_code)
+    return GitHubError(f"{context}: HTTP {status_code}", status_code)
 
 
 class GitHubAppClient(GitHubClient):
@@ -102,7 +115,13 @@ class GitHubAppClient(GitHubClient):
         return resp.json()
 
     def close_pr(self, repo: str, pr_number: int, branch: str) -> None:
-        """PR close + branch 삭제. 멱등 — 404 / 이미 닫힘은 silent skip."""
+        """PR close + branch 삭제.
+
+        멱등 케이스 (404 = 이미 닫힘 / 422 = 이미 처리) 는 silent. 401/403 은
+        ``GitHubAuthError`` (토큰 만료 / 권한 부족 — 재시도 무의미), 5xx 는
+        ``GitHubTransientError`` (재시도 가치 있음) 로 분리해 호출자가 운영
+        분기 가능하게 한다.
+        """
         headers = self._auth_headers()
         close_resp = self._http.patch(
             f"{_API}/repos/{repo}/pulls/{pr_number}",
@@ -110,16 +129,27 @@ class GitHubAppClient(GitHubClient):
             json={"state": "closed"},
         )
         if close_resp.status_code not in (200, 404, 422):
-            close_resp.raise_for_status()
+            raise _classify_status(close_resp.status_code, f"PATCH /repos/{repo}/pulls/{pr_number}")
 
+        self._delete_ref(repo, branch, headers)
+        print(f"[GitHubAppClient] PR #{pr_number} closed + branch {branch} 삭제")
+
+    def delete_branch(self, repo: str, branch: str) -> None:
+        """branch 단독 삭제 — ``open_pr`` 실패 후 orphan cleanup 용."""
+        headers = self._auth_headers()
+        self._delete_ref(repo, branch, headers)
+
+    def _delete_ref(self, repo: str, branch: str, headers: dict) -> None:
+        """DELETE /git/refs/heads/{branch} 공통 처리.
+
+        404 / 422 멱등 silent. 그 외는 ``_classify_status`` 가 분리한 예외.
+        """
         del_resp = self._http.delete(
             f"{_API}/repos/{repo}/git/refs/heads/{branch}",
             headers=headers,
         )
         if del_resp.status_code not in (204, 404, 422):
-            del_resp.raise_for_status()
-
-        print(f"[GitHubAppClient] PR #{pr_number} closed + branch {branch} 삭제")
+            raise _classify_status(del_resp.status_code, f"DELETE /repos/{repo}/git/refs/heads/{branch}")
 
     # ------- auth ------------------------------------------------------------
 
