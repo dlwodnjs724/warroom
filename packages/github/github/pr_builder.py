@@ -75,12 +75,15 @@ def _open_pr_or_cleanup(
     except Exception as open_err:
         try:
             client.delete_branch(repo, branch)
-            print(f"[pr_builder] open_pr 실패 — orphan branch {branch} 정리 완료: {open_err}")
+            print(f"[pr_builder] open_pr 실패 — orphan branch {repo}@{branch} 정리 완료: {open_err}")
         except Exception as cleanup_err:
             # 운영자가 반드시 인지해야 함 — GitHub 에 orphan branch 가 남는다.
+            # repo + branch 둘 다 포함 → 그대로 paste 해 수동 삭제 가능:
+            #   gh api -X DELETE /repos/{repo}/git/refs/heads/{branch}
             print(
-                f"[pr_builder][ORPHAN] open_pr 실패 + branch {branch} 정리 실패 "
-                f"(수동 삭제 필요) — open_err={open_err}, cleanup_err={cleanup_err}"
+                f"[pr_builder][ORPHAN] open_pr 실패 + branch 정리 실패 "
+                f"— 수동 삭제 필요: gh api -X DELETE /repos/{repo}/git/refs/heads/{branch} "
+                f"(open_err={open_err}, cleanup_err={cleanup_err})"
             )
         raise
 

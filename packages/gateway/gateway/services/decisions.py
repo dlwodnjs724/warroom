@@ -42,7 +42,42 @@ async def handle_decision(incident_id: str, approved: bool) -> JSONResponse:
     if approved:
         # _open_pr 는 sync (build_patch_pr 내부가 sync httpx). async endpoint 의
         # 이벤트 루프 점유를 피하려면 to_thread 위임 — 1초 룰 / async.md § 1.
-        pr_result = await asyncio.to_thread(_open_pr, entry, github_client, github_repo)
+        # transport 실패도 분류된 예외로 surface — reject 경로와 대칭.
+        try:
+            pr_result = await asyncio.to_thread(_open_pr, entry, github_client, github_repo)
+        except GitHubAuthError as e:
+            print(
+                f"[WARROOM][open_pr] {incident_id} PR 생성 실패 — "
+                f"error_type=auth status_code={e.status_code} (토큰 회전 / 권한 점검 필요): {e}"
+            )
+            response["pull_request"] = {
+                "error": str(e),
+                "error_type": "auth",
+                "status_code": e.status_code,
+            }
+            return JSONResponse(response)
+        except GitHubTransientError as e:
+            print(
+                f"[WARROOM][open_pr] {incident_id} PR 생성 실패 — "
+                f"error_type=transient status_code={e.status_code} (재시도 가치 있음): {e}"
+            )
+            response["pull_request"] = {
+                "error": str(e),
+                "error_type": "transient",
+                "status_code": e.status_code,
+            }
+            return JSONResponse(response)
+        except GitHubError as e:
+            print(
+                f"[WARROOM][open_pr] {incident_id} PR 생성 실패 — "
+                f"error_type=http status_code={e.status_code}: {e}"
+            )
+            response["pull_request"] = {
+                "error": str(e),
+                "error_type": "http",
+                "status_code": e.status_code,
+            }
+            return JSONResponse(response)
         if pr_result and isinstance(pr_result.get("number"), int) and pr_result.get("branch"):
             # PR 은 이미 GitHub 에 만들어졌으므로 DB 영속화 실패가 endpoint
             # 전체를 500 으로 떨어뜨리면 PR 이 고아 (DB 모르고 GitHub 만 알고
