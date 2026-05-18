@@ -19,7 +19,7 @@ from urllib.parse import quote
 import httpx
 import jwt
 
-from .base import GitHubAuthError, GitHubClient, GitHubError, GitHubTransientError
+from ..base import GitHubAuthError, GitHubClient, GitHubError, GitHubTransientError
 
 _API = "https://api.github.com"
 

@@ -13,7 +13,7 @@ import json
 import os
 from pathlib import Path
 
-from .base import GitHubClient
+from ..base import GitHubClient
 
 
 class DryRunGitHubClient(GitHubClient):

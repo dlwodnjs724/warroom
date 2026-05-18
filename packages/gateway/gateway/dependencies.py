@@ -12,7 +12,7 @@ env credentials 미설정 시 ``make_github_client`` 가 ``DryRunGitHubClient`` 
 import os
 
 from github.base import GitHubClient
-from github.factory import make_github_client
+from github.clients.factory import make_github_client
 
 _github_client: GitHubClient | None = None
 

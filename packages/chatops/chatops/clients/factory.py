@@ -10,7 +10,7 @@ SlackNotifier 에 주입되어, sync 한 SlackNotifier 가 async store 를 호�
 
 import os
 
-from .base import Notifier
+from ..base import Notifier
 from .console import ConsoleNotifier
 from .slack import SlackNotifier, ThreadLookup, ThreadPersist
 

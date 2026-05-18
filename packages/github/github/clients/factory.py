@@ -10,7 +10,7 @@
 
 import os
 
-from .base import GitHubClient
+from ..base import GitHubClient
 from .dry_run import DryRunGitHubClient
 
 

@@ -41,7 +41,7 @@ def _lookup_slack_thread(incident_id: str) -> tuple[str, str] | None:
 
 async def run_incident_pipeline(event: IncidentEvent) -> None:
     # orchestrator는 import 지연 (LLM 초기화 비용)
-    from chatops.factory import make_notifier
+    from chatops.clients.factory import make_notifier
     from orchestrator.runner import run_pipeline
 
     repo = get_repository()

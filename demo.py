@@ -40,7 +40,7 @@ if not _USE_MOCK:
     print(f"  Analyst: {_models['analyst']}")
     print(f"  Fixer  : {_models['fixer']}")
 
-from chatops.factory import make_notifier
+from chatops.clients.factory import make_notifier
 from common.models import IncidentStatus
 from gateway.infrastructure.db.repository import get_repository
 from gateway.infrastructure.db.session import init_schema, is_sqlite_backend
@@ -147,7 +147,7 @@ def _open_github_pr(report) -> None:
     if not repo:
         print("[WARROOM] GITHUB_REPO 미설정 — PR 생성 건너뜀")
         return
-    from github.factory import make_github_client
+    from github.clients.factory import make_github_client
     from github.pr_builder import build_patch_pr
 
     client = make_github_client()
