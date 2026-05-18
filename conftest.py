@@ -35,7 +35,9 @@ def _isolate_db(monkeypatch):
     session_mod.reset_engine()
     repo_mod.reset_repository()
     deps_mod.reset_github_client()
+    deps_mod.reset_slack_notifier()
     yield
     session_mod.reset_engine()
     repo_mod.reset_repository()
     deps_mod.reset_github_client()
+    deps_mod.reset_slack_notifier()
