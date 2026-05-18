@@ -1,12 +1,14 @@
 """Human-in-the-Loop 승인/반려 결정 + 승인 시 GitHub PR 트리거."""
 
-import os
 from datetime import datetime
 
 from common.models import IncidentCategory, IncidentStatus, ResolutionReport, Severity
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
+from github.base import GitHubClient
+from github.pr_builder import build_patch_pr
 
+from gateway.dependencies import get_github_client, get_github_repo
 from gateway.infrastructure.db.repository import get_repository
 
 
@@ -32,8 +34,12 @@ async def handle_decision(incident_id: str, approved: bool) -> JSONResponse:
         "status": status,
         "action": action,
     }
+
+    github_client = get_github_client()
+    github_repo = get_github_repo()
+
     if approved:
-        pr_result = _open_pr(entry)
+        pr_result = _open_pr(entry, github_client, github_repo)
         if pr_result and isinstance(pr_result.get("number"), int) and pr_result.get("branch"):
             # PR 은 이미 GitHub 에 만들어졌으므로 DB 영속화 실패가 endpoint
             # 전체를 500 으로 떨어뜨리면 PR 이 고아 (DB 모르고 GitHub 만 알고
@@ -52,17 +58,20 @@ async def handle_decision(incident_id: str, approved: bool) -> JSONResponse:
         if pr_result:
             response["pull_request"] = pr_result
     else:
-        closed = await _close_pr_if_exists(incident_id)
+        closed = await _close_pr_if_exists(incident_id, github_client, github_repo)
         if closed:
             response["pr_closed"] = closed
 
     return JSONResponse(response)
 
 
-async def _close_pr_if_exists(incident_id: str) -> dict | None:
+async def _close_pr_if_exists(
+    incident_id: str,
+    client: GitHubClient,
+    github_repo: str | None,
+) -> dict | None:
     """반려 시 영속화된 PR 정보가 있으면 close + branch 삭제 (Phase 4.5)."""
-    repo_target = os.getenv("GITHUB_REPO")
-    if not repo_target:
+    if not github_repo:
         return None
 
     repo = get_repository()
@@ -71,21 +80,21 @@ async def _close_pr_if_exists(incident_id: str) -> dict | None:
         return None
     pr_number, branch = pr_info
 
-    from github.factory import make_github_client
-
-    client = make_github_client()
     try:
-        client.close_pr(repo_target, pr_number, branch)
+        client.close_pr(github_repo, pr_number, branch)
     except Exception as e:
         print(f"[WARROOM] PR cleanup 실패 (best-effort): {e}")
         return {"number": pr_number, "branch": branch, "error": str(e)}
     return {"number": pr_number, "branch": branch, "closed": True}
 
 
-def _open_pr(entry: dict) -> dict | None:
+def _open_pr(
+    entry: dict,
+    client: GitHubClient,
+    github_repo: str | None,
+) -> dict | None:
     """승인된 인시던트로 PR 을 만든다. GITHUB_REPO 미설정 시 skip."""
-    repo = os.getenv("GITHUB_REPO")
-    if not repo:
+    if not github_repo:
         print("[WARROOM] GITHUB_REPO 미설정 — PR 생성 건너뜀")
         return None
 
@@ -98,8 +107,6 @@ def _open_pr(entry: dict) -> dict | None:
     if category != "code":
         print(f"[WARROOM] 카테고리 '{category}' — 코드 외 장애로 PR 생성 건너뜀")
         return {"skipped": True, "reason": f"category={category}"}
-
-    from github.factory import make_github_client
 
     created_at = report_dict["created_at"]
     if isinstance(created_at, str):
@@ -115,8 +122,7 @@ def _open_pr(entry: dict) -> dict | None:
         is_approved=True,
         created_at=created_at,
     )
-    client = make_github_client()
-    result = client.create_patch_pr(report, repo=repo)
+    result = build_patch_pr(client, report, repo=github_repo)
     return {
         "url": result.pr_url,
         "branch": result.branch,

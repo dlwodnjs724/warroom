@@ -160,11 +160,14 @@ class TestRejectPrCleanup:
         return incident_id
 
     async def test_reject_with_pr_info_calls_close(self, client, monkeypatch, tmp_path):
+        from gateway.dependencies import reset_github_client
         from gateway.infrastructure.db.repository import get_repository
 
         log_path = tmp_path / "gh.jsonl"
         monkeypatch.setenv("GITHUB_REPO", "owner/demo")
         monkeypatch.setenv("GITHUB_DRY_RUN_LOG", str(log_path))
+        # cached DryRun client (lifespan 에서 default path 로 생성됨) 무효화
+        reset_github_client()
 
         incident_id = await self._seed_awaiting()
         repo = get_repository()
@@ -215,7 +218,7 @@ class TestRejectPrCleanup:
         # _open_pr 가 실 PR 번호/브랜치를 돌려줄 수 있게 mock
         from gateway.services import decisions as dec_mod
 
-        def fake_open_pr(entry):
+        def fake_open_pr(entry, client, github_repo):
             return {
                 "url": "https://github.com/owner/demo/pull/77",
                 "branch": "warroom/incident-X",
