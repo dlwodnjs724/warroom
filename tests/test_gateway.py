@@ -241,6 +241,97 @@ class TestRejectPrCleanup:
         assert body["pull_request"]["number"] == 77
         assert "pr_persist_warning" in body["pull_request"]
 
+    async def test_reject_close_pr_auth_error_surfaces_status_code(self, client, monkeypatch):
+        """close_pr 가 401/403 일 때 error_type=auth + status_code 응답."""
+        from gateway.dependencies import reset_github_client
+        from gateway.infrastructure.db.repository import get_repository
+        from github.base import GitHubAuthError
+
+        monkeypatch.setenv("GITHUB_REPO", "owner/demo")
+        reset_github_client()
+
+        incident_id = await self._seed_awaiting("INC-CLOSE-AUTH-1")
+        repo = get_repository()
+        await repo.set_pr_info(incident_id, 55, "warroom/incident-AUTH")
+
+        # 캐시된 dry-run client 의 close_pr 만 401 raise 하도록 패치
+        from gateway.dependencies import get_github_client
+
+        ghc = get_github_client()
+
+        def boom(repo, pr_number, branch):
+            raise GitHubAuthError("토큰 만료", 401)
+
+        monkeypatch.setattr(ghc, "close_pr", boom)
+
+        resp = client.post(f"/incidents/{incident_id}/reject")
+        assert resp.status_code == 200
+        pr_closed = resp.json()["pr_closed"]
+        assert pr_closed["number"] == 55
+        assert pr_closed["error_type"] == "auth"
+        assert pr_closed["status_code"] == 401
+
+    async def test_reject_close_pr_transient_error_surfaces_status_code(self, client, monkeypatch):
+        """close_pr 가 5xx 일 때 error_type=transient + status_code 응답."""
+        from gateway.dependencies import get_github_client, reset_github_client
+        from gateway.infrastructure.db.repository import get_repository
+        from github.base import GitHubTransientError
+
+        monkeypatch.setenv("GITHUB_REPO", "owner/demo")
+        reset_github_client()
+
+        incident_id = await self._seed_awaiting("INC-CLOSE-5XX-1")
+        repo = get_repository()
+        await repo.set_pr_info(incident_id, 66, "warroom/incident-5XX")
+
+        ghc = get_github_client()
+
+        def boom(repo, pr_number, branch):
+            raise GitHubTransientError("bad gateway", 502)
+
+        monkeypatch.setattr(ghc, "close_pr", boom)
+
+        resp = client.post(f"/incidents/{incident_id}/reject")
+        assert resp.status_code == 200
+        pr_closed = resp.json()["pr_closed"]
+        assert pr_closed["error_type"] == "transient"
+        assert pr_closed["status_code"] == 502
+
+    async def test_reject_close_pr_runs_in_worker_thread(self, client, monkeypatch):
+        """close_pr (sync httpx) 가 async endpoint 의 이벤트 루프를 점유하지 않는다.
+
+        to_thread 위임을 검증하기 위해 close_pr 안에서 현재 스레드가 메인 스레드가
+        아님을 확인 — async path 의 이벤트 루프와 분리된 워커 스레드에서 실행됨.
+        """
+        import threading
+
+        from gateway.dependencies import get_github_client, reset_github_client
+        from gateway.infrastructure.db.repository import get_repository
+
+        monkeypatch.setenv("GITHUB_REPO", "owner/demo")
+        reset_github_client()
+
+        incident_id = await self._seed_awaiting("INC-CLOSE-THREAD-1")
+        repo = get_repository()
+        await repo.set_pr_info(incident_id, 88, "warroom/incident-THREAD")
+
+        main_thread = threading.get_ident()
+        observed: dict = {}
+
+        ghc = get_github_client()
+        orig = ghc.close_pr
+
+        def trace(repo, pr_number, branch):
+            observed["thread"] = threading.get_ident()
+            return orig(repo, pr_number, branch)
+
+        monkeypatch.setattr(ghc, "close_pr", trace)
+
+        resp = client.post(f"/incidents/{incident_id}/reject")
+        assert resp.status_code == 200
+        # close_pr 호출 스레드 != 테스트 (main) 스레드 → to_thread 위임됨
+        assert observed["thread"] != main_thread
+
 
 class TestWebhookSignatureVerification:
     def test_sentry_rejects_invalid_signature(self, client, monkeypatch):
