@@ -4,30 +4,22 @@
 
 1. **diff 경로**: patch_suggestion 에서 unified diff 추출 → base 파일 fetch
    (신규 파일은 skip) → ``git apply --check`` 검증 → tempdir 적용 → 변경된
-   파일 + ``incidents/<id>.md`` 분석 리포트 + redact → Git Data API 로 단일
-   commit → PR open.
+   파일 + ``incidents/<id>.md`` 분석 리포트 + redact → 단일 commit → PR open.
 
 2. **markdown 폴백**: diff 추출/검증/적용 실패 시 ``incidents/<id>.md`` 만
    commit 하고 PR open.
 
-이 모듈은 PR 생성의 *정책* 만 담당한다 — REST 호출, 인증, base64 인코딩 등
-transport 디테일은 클라이언트 구현 (``GitHubAppClient``) 이 책임진다.
+``GitHubClient`` Protocol (transport primitives) 만 의존한다 — 인증, REST
+호출, base64 인코딩 등 transport 디테일은 클라이언트 구현이 책임진다.
 """
-
-from __future__ import annotations
-
-from typing import TYPE_CHECKING
 
 from common.diff import changed_paths, extract_diff, is_new_file
 from common.models import ResolutionReport
 from common.redact import redact_secrets
 
-from .base import PullRequestResult
+from .base import GitHubClient, PullRequestResult
 from .patch import apply_diff, verify_apply
-from .report import branch_name, incident_markdown
-
-if TYPE_CHECKING:
-    from .app import GitHubAppClient
+from .report import branch_name, incident_markdown, pr_body, pr_title
 
 
 class DiffApplyError(RuntimeError):
@@ -38,37 +30,32 @@ class DiffApplyError(RuntimeError):
 
 
 def build_patch_pr(
-    client: GitHubAppClient,
+    client: GitHubClient,
     report: ResolutionReport,
     repo: str,
     base_branch: str = "main",
 ) -> PullRequestResult:
     """승인된 리포트로 PR 생성. diff 우선, 실패 시 markdown 폴백."""
-    headers = client._auth_headers()
-
     diff = extract_diff(report.patch_suggestion)
     if diff:
         try:
-            return _build_diff_pr(client, report, diff, repo, base_branch, headers)
+            return _build_diff_pr(client, report, diff, repo, base_branch)
         except DiffApplyError as e:
             print(f"[pr_builder] diff 흐름 실패, markdown 폴백: {e}")
 
-    return _build_markdown_only_pr(client, report, repo, base_branch, headers)
+    return _build_markdown_only_pr(client, report, repo, base_branch)
 
 
 def _build_diff_pr(
-    client: GitHubAppClient,
+    client: GitHubClient,
     report: ResolutionReport,
     diff: str,
     repo: str,
     base_branch: str,
-    headers: dict,
 ) -> PullRequestResult:
     paths = changed_paths(diff)
     if not paths:
         raise DiffApplyError("diff 에 변경 파일 없음")
-
-    base_sha = client._base_sha(repo, base_branch, headers)
 
     # 신규 파일 (--- /dev/null) 은 base_files 에서 제외 — pre-materialize 하면
     # git apply 가 "파일 이미 존재" 로 실패한다. apply_diff 가 git apply 가
@@ -78,7 +65,7 @@ def _build_diff_pr(
         if is_new_file(diff, path):
             continue
         try:
-            base_files[path] = client._get_file_content(repo, path, base_branch, headers)
+            base_files[path] = client.get_file_content(repo, path, base_branch)
         except FileNotFoundError as e:
             raise DiffApplyError(f"base 파일 없음 ({base_branch}): {e}") from None
 
@@ -99,60 +86,58 @@ def _build_diff_pr(
     changed = {path: redact_secrets(content) for path, content in changed.items()}
 
     branch = branch_name(report)
-    base_tree = client._get_tree_sha(repo, base_sha, headers)
-
-    entries = []
-    for path, content in changed.items():
-        blob_sha = client._create_blob(repo, content, headers)
-        entries.append({"path": path, "mode": "100644", "type": "blob", "sha": blob_sha})
-
-    new_tree = client._create_tree(repo, base_tree, entries, headers)
-    commit_sha = client._create_commit(
-        repo=repo,
-        parent_sha=base_sha,
-        tree_sha=new_tree,
-        message=(
-            f"fix({report.incident_id}): AI agent unified diff 패치\n\n"
-            f"승인된 분석 리포트와 함께 commit. 변경 파일: {', '.join(paths)}"
-        ),
-        headers=headers,
+    message = (
+        f"fix({report.incident_id}): AI agent unified diff 패치\n\n"
+        f"승인된 분석 리포트와 함께 commit. 변경 파일: {', '.join(paths)}"
     )
-    client._create_branch(repo, branch, commit_sha, headers)
-
-    pr = client._create_pr(repo, branch, base_branch, report, headers)
+    client.commit_files(
+        repo=repo,
+        branch=branch,
+        base_branch=base_branch,
+        files=changed,
+        message=message,
+    )
+    pr = client.open_pr(
+        repo=repo,
+        branch=branch,
+        base_branch=base_branch,
+        title=pr_title(report),
+        body=pr_body(report),
+    )
     print(f"[pr_builder] diff PR 생성 완료: {pr['html_url']} (변경 {len(paths)} 파일)")
     return PullRequestResult(
         pr_url=pr["html_url"],
         pr_number=pr["number"],
         branch=branch,
-        dry_run=False,
+        dry_run=pr.get("dry_run", False),
     )
 
 
 def _build_markdown_only_pr(
-    client: GitHubAppClient,
+    client: GitHubClient,
     report: ResolutionReport,
     repo: str,
     base_branch: str,
-    headers: dict,
 ) -> PullRequestResult:
-    base_sha = client._base_sha(repo, base_branch, headers)
     branch = branch_name(report)
-    client._create_branch(repo, branch, base_sha, headers)
-    client._put_file(
+    client.commit_files(
         repo=repo,
         branch=branch,
-        path=f"incidents/{report.incident_id}.md",
-        content=incident_markdown(report),
+        base_branch=base_branch,
+        files={f"incidents/{report.incident_id}.md": incident_markdown(report)},
         message=f"docs(incident): {report.incident_id} AI 분석 리포트",
-        headers=headers,
     )
-    pr = client._create_pr(repo, branch, base_branch, report, headers)
-
+    pr = client.open_pr(
+        repo=repo,
+        branch=branch,
+        base_branch=base_branch,
+        title=pr_title(report),
+        body=pr_body(report),
+    )
     print(f"[pr_builder] markdown PR 생성 완료: {pr['html_url']}")
     return PullRequestResult(
         pr_url=pr["html_url"],
         pr_number=pr["number"],
         branch=branch,
-        dry_run=False,
+        dry_run=pr.get("dry_run", False),
     )

@@ -1,8 +1,9 @@
-"""GitHub App 기반 PR 생성 클라이언트.
+"""GitHub App 기반 transport 클라이언트.
 
 PR 생성 정책 (diff 적용 / markdown 폴백 / hybrid 동봉) 은 ``pr_builder``
-모듈로 분리되어 있다. 이 파일은 인증 (JWT → installation token) + 저수준
-REST helper (blob/tree/commit/ref, Contents API) 만 책임진다.
+모듈로 분리되어 있다. 이 파일은 인증 (JWT → installation token) + transport
+primitive (``get_file_content`` / ``commit_files`` / ``open_pr`` / ``close_pr``)
+만 책임진다.
 
 인증 흐름:
     App ID + private key → JWT(RS256, 10분 TTL)
@@ -20,8 +21,6 @@ import jwt
 from common.models import ResolutionReport
 
 from .base import GitHubClient, PullRequestResult
-from .pr_builder import build_patch_pr
-from .report import pr_body, pr_title
 
 _API = "https://api.github.com"
 
@@ -47,8 +46,90 @@ class GitHubAppClient(GitHubClient):
         repo: str,
         base_branch: str = "main",
     ) -> PullRequestResult:
-        """승인된 리포트로 PR 생성. usecase 본체는 ``pr_builder`` 에 위임."""
+        """이전 호출자 호환용 thin wrapper. 신규 호출자는 ``pr_builder.build_patch_pr`` 직접 사용."""
+        from .pr_builder import build_patch_pr
+
         return build_patch_pr(self, report, repo, base_branch)
+
+    # ------- transport primitives -------------------------------------------
+
+    def get_file_content(self, repo: str, path: str, ref: str) -> str:
+        """기존 파일의 raw 내용 fetch. 404 면 FileNotFoundError.
+
+        path 는 URL-encode (공백/유니코드/`#` 안전 처리). 한국어 파일명, 공백
+        포함 경로도 정상 동작.
+        """
+        headers = self._auth_headers()
+        encoded_path = quote(path, safe="/")
+        encoded_ref = quote(ref, safe="/")
+        resp = self._http.get(
+            f"{_API}/repos/{repo}/contents/{encoded_path}?ref={encoded_ref}",
+            headers=headers,
+        )
+        if resp.status_code == 404:
+            raise FileNotFoundError(path)
+        resp.raise_for_status()
+        data = resp.json()
+        return base64.b64decode(data["content"]).decode("utf-8")
+
+    def commit_files(
+        self,
+        repo: str,
+        branch: str,
+        base_branch: str,
+        files: dict[str, str],
+        message: str,
+    ) -> None:
+        """Git Data API 로 base_branch 위에 새 branch 를 만들고 files 를 단일 commit 으로 push."""
+        headers = self._auth_headers()
+        base_sha = self._base_sha(repo, base_branch, headers)
+        base_tree = self._get_tree_sha(repo, base_sha, headers)
+
+        entries = []
+        for path, content in files.items():
+            blob_sha = self._create_blob(repo, content, headers)
+            entries.append({"path": path, "mode": "100644", "type": "blob", "sha": blob_sha})
+
+        new_tree = self._create_tree(repo, base_tree, entries, headers)
+        commit_sha = self._create_commit(repo, base_sha, new_tree, message, headers)
+        self._create_branch(repo, branch, commit_sha, headers)
+
+    def open_pr(
+        self,
+        repo: str,
+        branch: str,
+        base_branch: str,
+        title: str,
+        body: str,
+    ) -> dict:
+        headers = self._auth_headers()
+        resp = self._http.post(
+            f"{_API}/repos/{repo}/pulls",
+            headers=headers,
+            json={"title": title, "head": branch, "base": base_branch, "body": body},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def close_pr(self, repo: str, pr_number: int, branch: str) -> None:
+        """PR close + branch 삭제. 멱등 — 404 / 이미 닫힘은 silent skip."""
+        headers = self._auth_headers()
+        close_resp = self._http.patch(
+            f"{_API}/repos/{repo}/pulls/{pr_number}",
+            headers=headers,
+            json={"state": "closed"},
+        )
+        if close_resp.status_code not in (200, 404, 422):
+            close_resp.raise_for_status()
+
+        del_resp = self._http.delete(
+            f"{_API}/repos/{repo}/git/refs/heads/{branch}",
+            headers=headers,
+        )
+        if del_resp.status_code not in (204, 404, 422):
+            del_resp.raise_for_status()
+
+        print(f"[GitHubAppClient] PR #{pr_number} closed + branch {branch} 삭제")
 
     # ------- auth ------------------------------------------------------------
 
@@ -81,34 +162,12 @@ class GitHubAppClient(GitHubClient):
         self._token_exp = time.time() + 3600
         return self._token
 
-    # ------- low-level REST helpers ------------------------------------------
+    # ------- Git Data API low-level helpers ---------------------------------
 
     def _base_sha(self, repo: str, branch: str, headers: dict) -> str:
         resp = self._http.get(f"{_API}/repos/{repo}/git/ref/heads/{branch}", headers=headers)
         resp.raise_for_status()
         return resp.json()["object"]["sha"]
-
-    def _get_file_content(self, repo: str, path: str, ref: str, headers: dict) -> str:
-        """기존 파일의 raw 내용 fetch. 404 면 FileNotFoundError.
-
-        신규 파일 케이스 (--- /dev/null) 는 호출자가 is_new_file() 로 사전
-        분기해 이 메서드를 우회해야 한다. 호출되어 404 가 떨어졌다는 것은
-        diff 가 가리키는 base 파일이 실제로는 없다는 의미 → DiffApplyError.
-
-        path 는 URL-encode (공백/유니코드/`#` 안전 처리). 한국어 파일명, 공백
-        포함 경로도 정상 동작.
-        """
-        encoded_path = quote(path, safe="/")
-        encoded_ref = quote(ref, safe="/")
-        resp = self._http.get(
-            f"{_API}/repos/{repo}/contents/{encoded_path}?ref={encoded_ref}",
-            headers=headers,
-        )
-        if resp.status_code == 404:
-            raise FileNotFoundError(path)
-        resp.raise_for_status()
-        data = resp.json()
-        return base64.b64decode(data["content"]).decode("utf-8")
 
     def _get_tree_sha(self, repo: str, commit_sha: str, headers: dict) -> str:
         resp = self._http.get(
@@ -166,62 +225,3 @@ class GitHubAppClient(GitHubClient):
             json={"ref": f"refs/heads/{branch}", "sha": sha},
         )
         resp.raise_for_status()
-
-    def _put_file(
-        self,
-        repo: str,
-        branch: str,
-        path: str,
-        content: str,
-        message: str,
-        headers: dict,
-    ) -> None:
-        encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
-        encoded_path = quote(path, safe="/")
-        resp = self._http.put(
-            f"{_API}/repos/{repo}/contents/{encoded_path}",
-            headers=headers,
-            json={"message": message, "content": encoded, "branch": branch},
-        )
-        resp.raise_for_status()
-
-    def _create_pr(
-        self,
-        repo: str,
-        branch: str,
-        base_branch: str,
-        report: ResolutionReport,
-        headers: dict,
-    ) -> dict:
-        resp = self._http.post(
-            f"{_API}/repos/{repo}/pulls",
-            headers=headers,
-            json={
-                "title": pr_title(report),
-                "head": branch,
-                "base": base_branch,
-                "body": pr_body(report),
-            },
-        )
-        resp.raise_for_status()
-        return resp.json()
-
-    def close_pr(self, repo: str, pr_number: int, branch: str) -> None:
-        """PR close + branch 삭제. 멱등 — 404 / 이미 닫힘은 silent skip."""
-        headers = self._auth_headers()
-        close_resp = self._http.patch(
-            f"{_API}/repos/{repo}/pulls/{pr_number}",
-            headers=headers,
-            json={"state": "closed"},
-        )
-        if close_resp.status_code not in (200, 404, 422):
-            close_resp.raise_for_status()
-
-        del_resp = self._http.delete(
-            f"{_API}/repos/{repo}/git/refs/heads/{branch}",
-            headers=headers,
-        )
-        if del_resp.status_code not in (204, 404, 422):
-            del_resp.raise_for_status()
-
-        print(f"[GitHubAppClient] PR #{pr_number} closed + branch {branch} 삭제")
