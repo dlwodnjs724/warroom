@@ -126,6 +126,53 @@ class SlackNotifier(Notifier):
         else:
             self._post_message(self._channel, blocks=None, text=f"{incident_id} {text}")
 
+    # ---------- Interactivity ----------
+
+    def open_reject_modal(self, trigger_id: str, incident_id: str) -> None:
+        """반려 사유 입력 modal 을 연다 (views.open).
+
+        trigger_id 는 사용자가 ❌ 버튼을 누른 직후 Slack 이 발급한 1회용
+        토큰 — 3초 안에 ``views.open`` 으로 소모해야 한다 (호출자가 3초 룰
+        준수 책임).
+
+        modal callback_id 는 ``warroom_reject_modal`` 로 고정. incident_id 는
+        ``private_metadata`` 로 modal 에 매달아 두고, ``view_submission``
+        수신 시 추출한다.
+        """
+        view = {
+            "type": "modal",
+            "callback_id": "warroom_reject_modal",
+            "private_metadata": incident_id,
+            "title": {"type": "plain_text", "text": "Warroom — 반려"},
+            "submit": {"type": "plain_text", "text": "반려"},
+            "close": {"type": "plain_text", "text": "취소"},
+            "blocks": [
+                {
+                    "type": "input",
+                    "block_id": "reason_block",
+                    "label": {
+                        "type": "plain_text",
+                        "text": f"반려 사유 ({incident_id})",
+                    },
+                    "element": {
+                        "type": "plain_text_input",
+                        "action_id": "reason",
+                        "multiline": True,
+                        "placeholder": {
+                            "type": "plain_text",
+                            "text": "예: 패치가 race condition 을 해결 못함",
+                        },
+                    },
+                },
+            ],
+        }
+        payload = {"trigger_id": trigger_id, "view": view}
+
+        if self._dry_run:
+            self._log_payload({"_api": "views.open", **payload})
+            return
+        self._call_slack("views.open", payload)
+
     # ---------- Internal helpers ----------
 
     def _get_thread(self, incident_id: str) -> tuple[str, str] | None:

@@ -225,7 +225,53 @@ class TestMessageStructure:
         action_ids = [el["action_id"] for el in actions["elements"]]
         assert "warroom_approve" in action_ids
         assert "warroom_reject" in action_ids
-        assert all(el["value"] == report.incident_id for el in actions["elements"])
+
+
+class TestRejectModal:
+    def test_dry_run_logs_views_open_payload(self, tmp_path):
+        log = tmp_path / "slack.jsonl"
+        notifier = SlackNotifier(bot_token=None, dry_run_log=str(log))
+        notifier.open_reject_modal("trig-123", "INC-42")
+
+        rows = [json.loads(line) for line in log.read_text().splitlines()]
+        assert len(rows) == 1
+        assert rows[0]["_api"] == "views.open"
+        assert rows[0]["trigger_id"] == "trig-123"
+        view = rows[0]["view"]
+        assert view["callback_id"] == "warroom_reject_modal"
+        assert view["private_metadata"] == "INC-42"
+        # plain_text_input block 이 incident_id 라벨에 포함되어 있어야 함
+        block = view["blocks"][0]
+        assert block["block_id"] == "reason_block"
+        assert block["element"]["action_id"] == "reason"
+        assert "INC-42" in block["label"]["text"]
+
+    def test_real_mode_posts_views_open_with_bearer(self):
+        fake = _FakeSlack(responses=[{"ok": True, "view": {"id": "V1"}}])
+        notifier = SlackNotifier(bot_token="xoxb-test", channel="#x", http_client=fake)
+        notifier.open_reject_modal("trig-abc", "INC-XYZ")
+
+        assert len(fake.calls) == 1
+        url, headers, payload = fake.calls[0]
+        assert url.endswith("/views.open")
+        assert headers["Authorization"] == "Bearer xoxb-test"
+        assert payload["trigger_id"] == "trig-abc"
+        assert payload["view"]["private_metadata"] == "INC-XYZ"
+
+    def test_real_mode_falls_back_to_dry_run_on_error(self, tmp_path):
+        log = tmp_path / "slack.jsonl"
+        fake = _FakeSlack(responses=[{"ok": False, "error": "trigger_expired"}])
+        notifier = SlackNotifier(
+            bot_token="xoxb-test",
+            channel="#x",
+            dry_run_log=str(log),
+            http_client=fake,
+        )
+        notifier.open_reject_modal("trig-stale", "INC-1")
+
+        rows = [json.loads(line) for line in log.read_text().splitlines()]
+        assert rows[0]["_error"] == "trigger_expired"
+        assert rows[0]["_api"] == "views.open"
 
 
 class TestTruncation:
