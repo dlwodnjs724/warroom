@@ -1,7 +1,12 @@
 """GitHub client 단위 테스트.
 
-dry-run 백엔드의 파일 출력과 GitHubAppClient 의 REST 호출 시퀀스를 검증한다.
-실 GitHub API 는 호출하지 않고 FakeHttp 로 응답을 가로챈다.
+세 가지 seam 을 분리 검증:
+
+1. ``DryRunGitHubClient`` — transport primitive 호출이 JSONL 페이로드 +
+   incidents/<id>.md 파일로 잘 떨어지는지.
+2. ``GitHubAppClient`` — transport primitive 별 REST 시퀀스 (FakeHttp).
+3. ``pr_builder.build_patch_pr`` — diff 경로 / markdown 폴백 정책 (FakeClient
+   in-memory). REST 디테일에 묶이지 않게 ``GitHubClient`` Protocol 만 의존.
 """
 
 import base64
@@ -12,8 +17,10 @@ import pytest
 from common.clock import APP_TZ
 from common.models import ResolutionReport, Severity
 from github.app import GitHubAppClient
+from github.base import GitHubClient
 from github.dry_run import DryRunGitHubClient
 from github.factory import make_github_client
+from github.pr_builder import build_patch_pr
 
 
 @pytest.fixture
@@ -31,12 +38,12 @@ def report():
 
 
 class TestDryRun:
-    def test_creates_incident_markdown_and_payload(self, report, tmp_path):
+    def test_commit_files_writes_incident_md_and_payload(self, report, tmp_path):
         client = DryRunGitHubClient(
             payload_log=str(tmp_path / "gh.jsonl"),
             incidents_dir=str(tmp_path / "incidents"),
         )
-        result = client.create_patch_pr(report, repo="toby/demo")
+        result = build_patch_pr(client, report, repo="toby/demo")
 
         assert result.dry_run is True
         assert result.pr_number is None
@@ -47,20 +54,38 @@ class TestDryRun:
         assert "HIGH" in md
         assert "charge() 에서 customer null 검증 누락" in md
 
-        payload = json.loads((tmp_path / "gh.jsonl").read_text().splitlines()[0])
-        assert payload["repo"] == "toby/demo"
-        assert payload["base"] == "main"
-        assert payload["head"] == result.branch
-        assert payload["files"][0]["path"] == "incidents/INC-TEST-001.md"
+        lines = (tmp_path / "gh.jsonl").read_text().splitlines()
+        actions = [json.loads(line)["action"] for line in lines]
+        assert actions == ["commit_files", "open_pr"]
+        commit = json.loads(lines[0])
+        assert commit["repo"] == "toby/demo"
+        assert commit["base"] == "main"
+        assert commit["branch"] == result.branch
+        assert commit["files"][0]["path"] == "incidents/INC-TEST-001.md"
 
     def test_appends_each_invocation(self, report, tmp_path):
         client = DryRunGitHubClient(
             payload_log=str(tmp_path / "gh.jsonl"),
             incidents_dir=str(tmp_path / "incidents"),
         )
-        client.create_patch_pr(report, repo="toby/demo")
-        client.create_patch_pr(report, repo="toby/demo")
-        assert len((tmp_path / "gh.jsonl").read_text().splitlines()) == 2
+        build_patch_pr(client, report, repo="toby/demo")
+        build_patch_pr(client, report, repo="toby/demo")
+        # 매 호출이 commit_files + open_pr 두 줄 → 총 4 줄
+        assert len((tmp_path / "gh.jsonl").read_text().splitlines()) == 4
+
+    def test_close_pr_records_action(self, tmp_path):
+        client = DryRunGitHubClient(
+            payload_log=str(tmp_path / "gh.jsonl"),
+            incidents_dir=str(tmp_path / "incidents"),
+        )
+        client.close_pr("toby/demo", 99, "warroom/incident-X")
+        line = json.loads((tmp_path / "gh.jsonl").read_text().splitlines()[0])
+        assert line == {
+            "action": "close_pr",
+            "repo": "toby/demo",
+            "pr_number": 99,
+            "branch": "warroom/incident-X",
+        }
 
 
 class TestFactory:
@@ -134,221 +159,236 @@ class FakeHttp:
         return self._next()
 
 
-class TestAppClient:
-    def test_create_patch_pr_full_sequence(self, report, tmp_path, monkeypatch):
-        # JWT 생성은 실 키가 필요하므로 monkeypatch 로 우회
-        monkeypatch.setattr("github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")
+def _make_app_client(tmp_path, monkeypatch, http: FakeHttp) -> GitHubAppClient:
+    monkeypatch.setattr("github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")
+    pem = tmp_path / "key.pem"
+    pem.write_text(_FAKE_KEY)
+    return GitHubAppClient(
+        app_id="999",
+        private_key_path=str(pem),
+        installation_id="123",
+        http_client=http,
+    )
 
-        pem = tmp_path / "key.pem"
-        pem.write_text(_FAKE_KEY)
 
+class TestAppClientPrimitives:
+    def test_get_file_content_decodes_base64(self, tmp_path, monkeypatch):
+        content_b64 = base64.b64encode(b"hello\nworld\n").decode("ascii")
         http = FakeHttp(
             [
-                FakeResponse(payload={"token": "ghs_install_token"}),  # install token
-                FakeResponse(payload={"object": {"sha": "base-sha-abc"}}),  # base sha
-                FakeResponse(payload={}),  # create branch
-                FakeResponse(payload={}),  # put file
-                FakeResponse(
-                    payload={
-                        "html_url": "https://github.com/toby/demo/pull/42",
-                        "number": 42,
-                    }
-                ),  # create pr
+                FakeResponse(payload={"token": "ghs"}),
+                FakeResponse(payload={"content": content_b64}),
             ]
         )
-        client = GitHubAppClient(
-            app_id="999",
-            private_key_path=str(pem),
-            installation_id="123",
-            http_client=http,
-        )
-        result = client.create_patch_pr(report, repo="toby/demo")
+        client = _make_app_client(tmp_path, monkeypatch, http)
+        assert client.get_file_content("toby/demo", "foo.py", "main") == "hello\nworld\n"
+        assert http.calls[1][0] == "GET"
+        assert "contents/foo.py" in http.calls[1][1]
 
-        assert result.dry_run is False
-        assert result.pr_number == 42
-        assert result.pr_url == "https://github.com/toby/demo/pull/42"
-
-        methods_urls = [(m, u) for m, u, _, _ in http.calls]
-        assert methods_urls == [
-            ("POST", "https://api.github.com/app/installations/123/access_tokens"),
-            ("GET", "https://api.github.com/repos/toby/demo/git/ref/heads/main"),
-            ("POST", "https://api.github.com/repos/toby/demo/git/refs"),
-            ("PUT", f"https://api.github.com/repos/toby/demo/contents/incidents/{report.incident_id}.md"),
-            ("POST", "https://api.github.com/repos/toby/demo/pulls"),
-        ]
-
-        # branch payload
-        _, _, _, branch_body = http.calls[2]
-        assert branch_body["ref"].startswith("refs/heads/warroom/incident-INC-TEST-001-")
-        assert branch_body["sha"] == "base-sha-abc"
-
-        # file commit base64 정상 인코딩
-        _, _, _, put_body = http.calls[3]
-        decoded = base64.b64decode(put_body["content"]).decode("utf-8")
-        assert "# Incident INC-TEST-001" in decoded
-
-        # PR body 에 분석 결과 포함
-        _, _, _, pr_body = http.calls[4]
-        assert "INC-TEST-001" in pr_body["title"]
-        assert "charge() 에서 customer null 검증 누락" in pr_body["body"]
-        assert pr_body["base"] == "main"
-
-    def test_apply_diff_pr_uses_git_data_api(self, tmp_path, monkeypatch):
-        """patch_suggestion 에 unified diff 가 있으면 Git Data API 로 단일 commit."""
-        monkeypatch.setattr("github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")
-        pem = tmp_path / "key.pem"
-        pem.write_text(_FAKE_KEY)
-
-        diff_report = ResolutionReport(
-            incident_id="INC-DIFF-001",
-            severity=Severity.HIGH,
-            triage_summary="결제 NPE",
-            root_cause="charge() lazy init 누락",
-            patch_suggestion=(
-                "```diff\n"
-                "--- a/foo.py\n"
-                "+++ b/foo.py\n"
-                "@@ -1,3 +1,4 @@\n"
-                " line1\n"
-                "+inserted\n"
-                " line2\n"
-                " line3\n"
-                "```"
-            ),
-            post_mortem_draft="단/중/장기",
-            is_approved=True,
-            created_at=datetime(2026, 5, 16, 9, 0, 0, tzinfo=APP_TZ),
-        )
-
-        base_content_b64 = base64.b64encode(b"line1\nline2\nline3\n").decode("ascii")
-
+    def test_get_file_content_404_raises_filenotfound(self, tmp_path, monkeypatch):
         http = FakeHttp(
             [
-                FakeResponse(payload={"token": "ghs_install_token"}),  # install token
-                FakeResponse(payload={"object": {"sha": "base-sha"}}),  # base ref
-                FakeResponse(payload={"content": base_content_b64}),  # GET contents foo.py
-                FakeResponse(payload={"tree": {"sha": "base-tree"}}),  # GET commit
-                FakeResponse(payload={"sha": "blob-foo"}),  # POST blob foo.py
-                FakeResponse(payload={"sha": "blob-md"}),  # POST blob incidents/*.md
-                FakeResponse(payload={"sha": "new-tree"}),  # POST tree
-                FakeResponse(payload={"sha": "new-commit"}),  # POST commit
-                FakeResponse(payload={}),  # POST refs (branch)
-                FakeResponse(
-                    payload={
-                        "html_url": "https://github.com/toby/demo/pull/99",
-                        "number": 99,
-                    }
-                ),  # POST pulls
+                FakeResponse(payload={"token": "ghs"}),
+                FakeResponse(status_code=404, payload={}),
             ]
         )
-        client = GitHubAppClient(
-            app_id="999",
-            private_key_path=str(pem),
-            installation_id="123",
-            http_client=http,
+        client = _make_app_client(tmp_path, monkeypatch, http)
+        with pytest.raises(FileNotFoundError):
+            client.get_file_content("toby/demo", "missing.py", "main")
+
+    def test_get_file_content_url_encodes_spaces(self, tmp_path, monkeypatch):
+        content_b64 = base64.b64encode(b"x\n").decode("ascii")
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs"}),
+                FakeResponse(payload={"content": content_b64}),
+            ]
         )
-        result = client.create_patch_pr(diff_report, repo="toby/demo")
+        client = _make_app_client(tmp_path, monkeypatch, http)
+        client.get_file_content("toby/demo", "path with space.py", "main")
+        url = http.calls[1][1]
+        assert "path%20with%20space.py" in url
+        assert " " not in url
 
-        assert result.pr_number == 99
-        assert result.pr_url == "https://github.com/toby/demo/pull/99"
-        assert result.dry_run is False
-
+    def test_commit_files_uses_git_data_api(self, tmp_path, monkeypatch):
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs"}),
+                FakeResponse(payload={"object": {"sha": "base-sha"}}),
+                FakeResponse(payload={"tree": {"sha": "base-tree"}}),
+                FakeResponse(payload={"sha": "blob-a"}),
+                FakeResponse(payload={"sha": "blob-b"}),
+                FakeResponse(payload={"sha": "new-tree"}),
+                FakeResponse(payload={"sha": "new-commit"}),
+                FakeResponse(payload={}),
+            ]
+        )
+        client = _make_app_client(tmp_path, monkeypatch, http)
+        client.commit_files(
+            repo="toby/demo",
+            branch="warroom/incident-X",
+            base_branch="main",
+            files={"a.py": "aa\n", "b.py": "bb\n"},
+            message="fix: x",
+        )
         methods_urls = [(m, u.split("?")[0]) for m, u, _, _ in http.calls]
         assert methods_urls == [
             ("POST", "https://api.github.com/app/installations/123/access_tokens"),
             ("GET", "https://api.github.com/repos/toby/demo/git/ref/heads/main"),
-            ("GET", "https://api.github.com/repos/toby/demo/contents/foo.py"),
             ("GET", "https://api.github.com/repos/toby/demo/git/commits/base-sha"),
             ("POST", "https://api.github.com/repos/toby/demo/git/blobs"),
             ("POST", "https://api.github.com/repos/toby/demo/git/blobs"),
             ("POST", "https://api.github.com/repos/toby/demo/git/trees"),
             ("POST", "https://api.github.com/repos/toby/demo/git/commits"),
             ("POST", "https://api.github.com/repos/toby/demo/git/refs"),
-            ("POST", "https://api.github.com/repos/toby/demo/pulls"),
         ]
-
-        # blob 컨텐츠가 redact 된 변경 후 파일을 담는지 sanity
-        _, _, _, blob_body = http.calls[4]
-        decoded = base64.b64decode(blob_body["content"]).decode("utf-8")
-        assert decoded == "line1\ninserted\nline2\nline3\n"
-
-        # tree 가 두 항목 (foo.py + incidents/*.md) 을 base_tree 위에 쌓는지
-        _, _, _, tree_body = http.calls[6]
+        # tree 가 base 위에 쌓이는지
+        _, _, _, tree_body = http.calls[5]
         assert tree_body["base_tree"] == "base-tree"
-        paths_in_tree = sorted(entry["path"] for entry in tree_body["tree"])
-        assert paths_in_tree == ["foo.py", "incidents/INC-DIFF-001.md"]
-
+        paths_in_tree = sorted(e["path"] for e in tree_body["tree"])
+        assert paths_in_tree == ["a.py", "b.py"]
         # branch ref 가 새 commit 을 가리키는지
-        _, _, _, ref_body = http.calls[8]
+        _, _, _, ref_body = http.calls[7]
         assert ref_body["sha"] == "new-commit"
-        assert ref_body["ref"].startswith("refs/heads/warroom/incident-INC-DIFF-001-")
+        assert ref_body["ref"] == "refs/heads/warroom/incident-X"
 
-    def test_falls_back_to_markdown_when_diff_apply_fails(self, tmp_path, monkeypatch):
-        """diff 가 base content 와 매치 안 되면 DiffApplyError → markdown 폴백."""
-        monkeypatch.setattr("github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")
-        pem = tmp_path / "key.pem"
-        pem.write_text(_FAKE_KEY)
+    def test_open_pr_returns_response_dict(self, tmp_path, monkeypatch):
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs"}),
+                FakeResponse(payload={"html_url": "https://x/1", "number": 7}),
+            ]
+        )
+        client = _make_app_client(tmp_path, monkeypatch, http)
+        pr = client.open_pr(
+            repo="toby/demo",
+            branch="warroom/x",
+            base_branch="main",
+            title="t",
+            body="b",
+        )
+        assert pr == {"html_url": "https://x/1", "number": 7}
+        assert http.calls[1][0] == "POST"
+        assert http.calls[1][1] == "https://api.github.com/repos/toby/demo/pulls"
 
-        bad_diff_report = ResolutionReport(
-            incident_id="INC-BAD-001",
-            severity=Severity.MEDIUM,
-            triage_summary="t",
-            root_cause="r",
+    def test_close_pr_patches_then_deletes_branch(self, tmp_path, monkeypatch):
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_install"}),
+                FakeResponse(status_code=200, payload={}),
+                FakeResponse(status_code=204, payload={}),
+            ]
+        )
+        client = _make_app_client(tmp_path, monkeypatch, http)
+        client.close_pr("toby/demo", 42, "warroom/incident-X-1")
+        methods_urls = [(m, u) for m, u, _, _ in http.calls]
+        assert methods_urls == [
+            ("POST", "https://api.github.com/app/installations/123/access_tokens"),
+            ("PATCH", "https://api.github.com/repos/toby/demo/pulls/42"),
+            ("DELETE", "https://api.github.com/repos/toby/demo/git/refs/heads/warroom/incident-X-1"),
+        ]
+        _, _, _, patch_body = http.calls[1]
+        assert patch_body == {"state": "closed"}
+
+    def test_close_pr_tolerates_404(self, tmp_path, monkeypatch):
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_install"}),
+                FakeResponse(status_code=404, payload={}),
+                FakeResponse(status_code=404, payload={}),
+            ]
+        )
+        client = _make_app_client(tmp_path, monkeypatch, http)
+        client.close_pr("toby/demo", 42, "x")  # 예외 없어야 한다
+
+    def test_token_is_cached_across_calls(self, tmp_path, monkeypatch):
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_T1"}),
+                FakeResponse(payload={"object": {"sha": "sha-1"}}),
+                FakeResponse(payload={"object": {"sha": "sha-2"}}),
+            ]
+        )
+        client = _make_app_client(tmp_path, monkeypatch, http)
+        client._base_sha("toby/demo", "main", client._auth_headers())
+        client._base_sha("toby/demo", "main", client._auth_headers())
+        install_calls = [c for c in http.calls if "access_tokens" in c[1]]
+        assert len(install_calls) == 1
+
+
+# --- pr_builder 정책 검증 (FakeClient) -------------------------------------
+
+
+class FakeClient(GitHubClient):
+    """``GitHubClient`` Protocol 의 in-memory 구현.
+
+    base_files 로 ``get_file_content`` 응답을 통제하고, ``commit_files`` /
+    ``open_pr`` 호출 페이로드를 리스트에 기록한다.
+    """
+
+    def __init__(self, base_files: dict[str, str] | None = None, pr_number: int = 42):
+        self._base_files = base_files or {}
+        self._pr_number = pr_number
+        self.commits: list[dict] = []
+        self.prs: list[dict] = []
+        self.closed: list[tuple[str, int, str]] = []
+
+    def get_file_content(self, repo: str, path: str, ref: str) -> str:
+        if path not in self._base_files:
+            raise FileNotFoundError(path)
+        return self._base_files[path]
+
+    def commit_files(self, repo, branch, base_branch, files, message):
+        self.commits.append(
+            {"repo": repo, "branch": branch, "base": base_branch, "files": dict(files), "message": message}
+        )
+
+    def open_pr(self, repo, branch, base_branch, title, body):
+        payload = {
+            "repo": repo,
+            "branch": branch,
+            "base": base_branch,
+            "title": title,
+            "body": body,
+        }
+        self.prs.append(payload)
+        return {"html_url": f"https://github.com/{repo}/pull/{self._pr_number}", "number": self._pr_number}
+
+    def close_pr(self, repo: str, pr_number: int, branch: str) -> None:
+        self.closed.append((repo, pr_number, branch))
+
+
+class TestPrBuilderDiffPath:
+    def test_applies_diff_and_includes_incident_markdown(self):
+        diff_report = ResolutionReport(
+            incident_id="INC-DIFF-001",
+            severity=Severity.HIGH,
+            triage_summary="결제 NPE",
+            root_cause="charge() lazy init 누락",
             patch_suggestion=(
-                "```diff\n"
-                "--- a/foo.py\n"
-                "+++ b/foo.py\n"
-                "@@ -1,2 +1,3 @@\n"
-                " expected_context\n"
-                "+inserted\n"
-                " other_context\n"
-                "```"
+                "```diff\n--- a/foo.py\n+++ b/foo.py\n@@ -1,3 +1,4 @@\n line1\n+inserted\n line2\n line3\n```"
             ),
-            post_mortem_draft="p",
+            post_mortem_draft="단/중/장기",
             is_approved=True,
             created_at=datetime(2026, 5, 16, 9, 0, 0, tzinfo=APP_TZ),
         )
+        client = FakeClient(base_files={"foo.py": "line1\nline2\nline3\n"}, pr_number=99)
+        result = build_patch_pr(client, diff_report, repo="toby/demo")
 
-        # base 파일 컨텐츠가 diff context 와 전혀 다름 → verify_apply 실패
-        wrong_b64 = base64.b64encode(b"completely different\nlines here\n").decode("ascii")
+        assert result.pr_number == 99
+        assert result.dry_run is False
+        # 단일 commit_files 호출 — diff 적용 결과 + incidents/<id>.md 동봉
+        assert len(client.commits) == 1
+        commit = client.commits[0]
+        assert commit["base"] == "main"
+        files = commit["files"]
+        assert files["foo.py"] == "line1\ninserted\nline2\nline3\n"
+        assert "# Incident INC-DIFF-001" in files["incidents/INC-DIFF-001.md"]
+        # open_pr 도 한 번
+        assert len(client.prs) == 1
+        assert client.prs[0]["title"].startswith("[warroom] HIGH")
 
-        http = FakeHttp(
-            [
-                FakeResponse(payload={"token": "ghs_install_token"}),  # install token
-                FakeResponse(payload={"object": {"sha": "base-sha"}}),  # base ref (diff 경로)
-                FakeResponse(payload={"content": wrong_b64}),  # GET contents → mismatch
-                # 여기서 DiffApplyError → markdown 폴백
-                FakeResponse(payload={"object": {"sha": "base-sha"}}),  # base ref (md 경로 재호출)
-                FakeResponse(payload={}),  # POST refs
-                FakeResponse(payload={}),  # PUT contents
-                FakeResponse(
-                    payload={"html_url": "https://github.com/toby/demo/pull/77", "number": 77}
-                ),  # POST pulls
-            ]
-        )
-        client = GitHubAppClient(
-            app_id="999",
-            private_key_path=str(pem),
-            installation_id="123",
-            http_client=http,
-        )
-        result = client.create_patch_pr(bad_diff_report, repo="toby/demo")
-
-        assert result.pr_number == 77
-
-        urls = [u.split("?")[0] for _, u, _, _ in http.calls]
-        # diff 경로 GET 3개 → markdown 폴백 GET/POST refs/PUT contents/POST pulls
-        assert "https://api.github.com/repos/toby/demo/git/trees" not in urls
-        assert "https://api.github.com/repos/toby/demo/git/blobs" not in urls
-        # markdown 폴백이 PUT contents/incidents 로 떨어졌는지
-        assert any("contents/incidents/INC-BAD-001.md" in u for _, u, _, _ in http.calls)
-
-    def test_apply_diff_pr_new_file_skips_base_fetch(self, tmp_path, monkeypatch):
-        """신규 파일 (--- /dev/null) 케이스 — GET contents 안 부르고 git apply 가 생성."""
-        monkeypatch.setattr("github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")
-        pem = tmp_path / "key.pem"
-        pem.write_text(_FAKE_KEY)
-
+    def test_new_file_skips_base_fetch(self):
         new_file_report = ResolutionReport(
             incident_id="INC-NEW-001",
             severity=Severity.MEDIUM,
@@ -367,49 +407,14 @@ class TestAppClient:
             is_approved=True,
             created_at=datetime(2026, 5, 17, 9, 0, 0, tzinfo=APP_TZ),
         )
+        client = FakeClient()  # base_files 비어 있음 — 신규 파일이므로 fetch 시도 안 해야
+        result = build_patch_pr(client, new_file_report, repo="toby/demo")
+        assert result.pr_number == 42
+        commit = client.commits[0]
+        paths = sorted(commit["files"].keys())
+        assert paths == ["app/new_module.py", "incidents/INC-NEW-001.md"]
 
-        http = FakeHttp(
-            [
-                FakeResponse(payload={"token": "ghs_install"}),  # install
-                FakeResponse(payload={"object": {"sha": "base-sha"}}),  # base ref
-                # GET contents 호출이 여기 없어야 한다 (신규파일 = base 없음)
-                FakeResponse(payload={"tree": {"sha": "base-tree"}}),  # GET commit
-                FakeResponse(payload={"sha": "blob-new"}),  # POST blob new_module.py
-                FakeResponse(payload={"sha": "blob-md"}),  # POST blob incidents/*.md
-                FakeResponse(payload={"sha": "new-tree"}),  # POST tree
-                FakeResponse(payload={"sha": "new-commit"}),  # POST commit
-                FakeResponse(payload={}),  # POST refs
-                FakeResponse(
-                    payload={"html_url": "https://github.com/toby/demo/pull/55", "number": 55}
-                ),  # POST pulls
-            ]
-        )
-        client = GitHubAppClient(
-            app_id="999",
-            private_key_path=str(pem),
-            installation_id="123",
-            http_client=http,
-        )
-        result = client.create_patch_pr(new_file_report, repo="toby/demo")
-
-        assert result.pr_number == 55
-
-        # 신규 파일이므로 GET contents 호출이 없어야 한다
-        contents_gets = [c for c in http.calls if c[0] == "GET" and "/contents/" in c[1]]
-        assert contents_gets == []
-
-        # tree 에 신규 파일 + 분석 리포트만 (base 파일 fetch 없음에도 새 파일이 commit 됨)
-        _, _, _, tree_body = http.calls[5]
-        paths_in_tree = sorted(entry["path"] for entry in tree_body["tree"])
-        assert paths_in_tree == ["app/new_module.py", "incidents/INC-NEW-001.md"]
-
-    def test_apply_diff_pr_redacts_final_file_content(self, tmp_path, monkeypatch):
-        """LLM 이 패치 + 라인에 토큰 박은 경우 blob commit 직전에 [REDACTED] 로 차단."""
-        monkeypatch.setattr("github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")
-        pem = tmp_path / "key.pem"
-        pem.write_text(_FAKE_KEY)
-
-        # 패치가 sk-XXX 키를 코드에 박는 시나리오 (OpenAI 키 형식 48자)
+    def test_redacts_secrets_before_commit(self):
         leak_report = ResolutionReport(
             incident_id="INC-LEAK-001",
             severity=Severity.HIGH,
@@ -429,97 +434,49 @@ class TestAppClient:
             is_approved=True,
             created_at=datetime(2026, 5, 17, 9, 0, 0, tzinfo=APP_TZ),
         )
+        client = FakeClient(base_files={"cfg.py": "import os\nVERSION = 1\n"})
+        build_patch_pr(client, leak_report, repo="toby/demo")
+        cfg = client.commits[0]["files"]["cfg.py"]
+        assert "sk-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL12345678" not in cfg
+        assert "[REDACTED:openai_api_key]" in cfg
 
-        base_b64 = base64.b64encode(b"import os\nVERSION = 1\n").decode("ascii")
 
-        http = FakeHttp(
-            [
-                FakeResponse(payload={"token": "ghs"}),
-                FakeResponse(payload={"object": {"sha": "base"}}),
-                FakeResponse(payload={"content": base_b64}),
-                FakeResponse(payload={"tree": {"sha": "base-tree"}}),
-                FakeResponse(payload={"sha": "blob-cfg"}),
-                FakeResponse(payload={"sha": "blob-md"}),
-                FakeResponse(payload={"sha": "new-tree"}),
-                FakeResponse(payload={"sha": "new-commit"}),
-                FakeResponse(payload={}),
-                FakeResponse(payload={"html_url": "https://x/1", "number": 1}),
-            ]
-        )
-        client = GitHubAppClient(
-            app_id="999",
-            private_key_path=str(pem),
-            installation_id="123",
-            http_client=http,
-        )
-        client.create_patch_pr(leak_report, repo="toby/demo")
+class TestPrBuilderMarkdownFallback:
+    def test_falls_back_when_no_diff(self, report):
+        client = FakeClient(pr_number=77)
+        result = build_patch_pr(client, report, repo="toby/demo")
+        assert result.pr_number == 77
+        # 단일 commit_files — markdown 만 동봉
+        commit = client.commits[0]
+        assert list(commit["files"].keys()) == [f"incidents/{report.incident_id}.md"]
 
-        # cfg.py 의 blob 컨텐츠가 redact 통과했는지
-        _, _, _, blob_body = http.calls[4]
-        decoded = base64.b64decode(blob_body["content"]).decode("utf-8")
-        assert "sk-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL12345678" not in decoded
-        assert "[REDACTED:openai_api_key]" in decoded
-
-    def test_apply_diff_pr_url_encodes_path_with_space(self, tmp_path, monkeypatch):
-        """공백/유니코드 파일 경로도 URL-encode 되어 정상 fetch."""
-        monkeypatch.setattr("github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")
-        pem = tmp_path / "key.pem"
-        pem.write_text(_FAKE_KEY)
-
-        space_path_report = ResolutionReport(
-            incident_id="INC-SPACE-001",
+    def test_falls_back_on_apply_context_mismatch(self):
+        bad_diff_report = ResolutionReport(
+            incident_id="INC-BAD-001",
             severity=Severity.MEDIUM,
             triage_summary="t",
             root_cause="r",
             patch_suggestion=(
                 "```diff\n"
-                "--- a/path with space.py\n"
-                "+++ b/path with space.py\n"
-                "@@ -1 +1,2 @@\n"
-                " original\n"
-                "+added\n"
+                "--- a/foo.py\n"
+                "+++ b/foo.py\n"
+                "@@ -1,2 +1,3 @@\n"
+                " expected_context\n"
+                "+inserted\n"
+                " other_context\n"
                 "```"
             ),
-            post_mortem_draft="pm",
+            post_mortem_draft="p",
             is_approved=True,
-            created_at=datetime(2026, 5, 17, 9, 0, 0, tzinfo=APP_TZ),
+            created_at=datetime(2026, 5, 16, 9, 0, 0, tzinfo=APP_TZ),
         )
-        base_b64 = base64.b64encode(b"original\n").decode("ascii")
+        # base content 가 diff context 와 전혀 다름 → verify_apply 실패 → 폴백
+        client = FakeClient(base_files={"foo.py": "completely different\nlines here\n"})
+        build_patch_pr(client, bad_diff_report, repo="toby/demo")
+        assert len(client.commits) == 1
+        assert list(client.commits[0]["files"].keys()) == ["incidents/INC-BAD-001.md"]
 
-        http = FakeHttp(
-            [
-                FakeResponse(payload={"token": "ghs"}),
-                FakeResponse(payload={"object": {"sha": "base"}}),
-                FakeResponse(payload={"content": base_b64}),
-                FakeResponse(payload={"tree": {"sha": "bt"}}),
-                FakeResponse(payload={"sha": "b1"}),
-                FakeResponse(payload={"sha": "b2"}),
-                FakeResponse(payload={"sha": "nt"}),
-                FakeResponse(payload={"sha": "nc"}),
-                FakeResponse(payload={}),
-                FakeResponse(payload={"html_url": "https://x/1", "number": 1}),
-            ]
-        )
-        client = GitHubAppClient(
-            app_id="999",
-            private_key_path=str(pem),
-            installation_id="123",
-            http_client=http,
-        )
-        client.create_patch_pr(space_path_report, repo="toby/demo")
-
-        # GET contents URL 이 공백을 %20 으로 인코딩
-        get_urls = [u for m, u, _, _ in http.calls if m == "GET" and "/contents/" in u]
-        assert len(get_urls) == 1
-        assert "path%20with%20space.py" in get_urls[0]
-        assert " " not in get_urls[0]  # 인코딩 안 된 공백 없어야 함
-
-    def test_apply_diff_pr_falls_back_when_base_file_404(self, tmp_path, monkeypatch):
-        """diff 가 기존 파일을 가리키는데 GitHub 에 그 파일이 없으면 DiffApplyError → markdown 폴백."""
-        monkeypatch.setattr("github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")
-        pem = tmp_path / "key.pem"
-        pem.write_text(_FAKE_KEY)
-
+    def test_falls_back_when_base_file_404(self):
         missing_report = ResolutionReport(
             incident_id="INC-MISSING-001",
             severity=Severity.HIGH,
@@ -538,113 +495,7 @@ class TestAppClient:
             is_approved=True,
             created_at=datetime(2026, 5, 17, 9, 0, 0, tzinfo=APP_TZ),
         )
-
-        http = FakeHttp(
-            [
-                FakeResponse(payload={"token": "ghs_install"}),
-                FakeResponse(payload={"object": {"sha": "base-sha"}}),  # base ref (diff)
-                FakeResponse(status_code=404, payload={}),  # GET contents → 404
-                # DiffApplyError → markdown 폴백
-                FakeResponse(payload={"object": {"sha": "base-sha"}}),  # base ref (md)
-                FakeResponse(payload={}),  # POST refs
-                FakeResponse(payload={}),  # PUT contents
-                FakeResponse(payload={"html_url": "https://github.com/toby/demo/pull/88", "number": 88}),
-            ]
-        )
-        client = GitHubAppClient(
-            app_id="999",
-            private_key_path=str(pem),
-            installation_id="123",
-            http_client=http,
-        )
-        result = client.create_patch_pr(missing_report, repo="toby/demo")
-
-        assert result.pr_number == 88
-        urls = [u.split("?")[0] for _, u, _, _ in http.calls]
-        # diff 경로가 Git Data API (blobs/trees/commits) 까지 못 갔는지
-        assert not any("/git/blobs" in u for u in urls)
-        assert not any("/git/trees" in u for u in urls)
-        # markdown 폴백 흔적 — PUT contents 가 떨어졌는지
-        assert any("contents/incidents/INC-MISSING-001.md" in u for _, u, _, _ in http.calls)
-
-    def test_close_pr_patches_then_deletes_branch(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")
-        pem = tmp_path / "key.pem"
-        pem.write_text(_FAKE_KEY)
-
-        http = FakeHttp(
-            [
-                FakeResponse(payload={"token": "ghs_install"}),  # install token
-                FakeResponse(status_code=200, payload={}),  # PATCH pulls
-                FakeResponse(status_code=204, payload={}),  # DELETE refs
-            ]
-        )
-        client = GitHubAppClient(
-            app_id="999",
-            private_key_path=str(pem),
-            installation_id="123",
-            http_client=http,
-        )
-        client.close_pr("toby/demo", 42, "warroom/incident-X-1")
-
-        methods_urls = [(m, u) for m, u, _, _ in http.calls]
-        assert methods_urls == [
-            ("POST", "https://api.github.com/app/installations/123/access_tokens"),
-            ("PATCH", "https://api.github.com/repos/toby/demo/pulls/42"),
-            ("DELETE", "https://api.github.com/repos/toby/demo/git/refs/heads/warroom/incident-X-1"),
-        ]
-        # close payload
-        _, _, _, patch_body = http.calls[1]
-        assert patch_body == {"state": "closed"}
-
-    def test_close_pr_tolerates_404(self, tmp_path, monkeypatch):
-        """이미 닫혀있거나 브랜치 없음 — 멱등 처리."""
-        monkeypatch.setattr("github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")
-        pem = tmp_path / "key.pem"
-        pem.write_text(_FAKE_KEY)
-
-        http = FakeHttp(
-            [
-                FakeResponse(payload={"token": "ghs_install"}),
-                FakeResponse(status_code=404, payload={}),  # PATCH → already closed
-                FakeResponse(status_code=404, payload={}),  # DELETE → branch gone
-            ]
-        )
-        client = GitHubAppClient(
-            app_id="999",
-            private_key_path=str(pem),
-            installation_id="123",
-            http_client=http,
-        )
-        client.close_pr("toby/demo", 42, "x")  # 예외 없어야 한다
-
-    def test_token_is_cached_across_calls(self, report, tmp_path, monkeypatch):
-        monkeypatch.setattr("github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")
-        pem = tmp_path / "key.pem"
-        pem.write_text(_FAKE_KEY)
-
-        # 첫 호출은 정상 5단계, 두 번째 호출은 토큰 캐시되어 4단계만
-        responses = [
-            FakeResponse(payload={"token": "ghs_T1"}),
-            FakeResponse(payload={"object": {"sha": "sha-1"}}),
-            FakeResponse(payload={}),
-            FakeResponse(payload={}),
-            FakeResponse(payload={"html_url": "https://x/1", "number": 1}),
-            # 2회차 — install token 호출 없음
-            FakeResponse(payload={"object": {"sha": "sha-2"}}),
-            FakeResponse(payload={}),
-            FakeResponse(payload={}),
-            FakeResponse(payload={"html_url": "https://x/2", "number": 2}),
-        ]
-        http = FakeHttp(responses)
-        client = GitHubAppClient(
-            app_id="999",
-            private_key_path=str(pem),
-            installation_id="123",
-            http_client=http,
-        )
-        client.create_patch_pr(report, repo="toby/demo")
-        client.create_patch_pr(report, repo="toby/demo")
-
-        install_calls = [c for c in http.calls if "access_tokens" in c[1]]
-        assert len(install_calls) == 1
+        client = FakeClient()  # base_files 비어 있음 → 신규 파일 아님 → FileNotFound → 폴백
+        build_patch_pr(client, missing_report, repo="toby/demo")
+        assert len(client.commits) == 1
+        assert list(client.commits[0]["files"].keys()) == ["incidents/INC-MISSING-001.md"]

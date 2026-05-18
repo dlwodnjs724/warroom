@@ -1,8 +1,12 @@
 """App credentials 가 없을 때의 폴백.
 
-생성될 PR 의 페이로드를 JSONL 로, 첨부 마크다운을 ./output/incidents/<id>.md 로
-기록하고 dry-run URL 을 돌려준다. 데모/CI 환경에서 GitHub 호출 없이 전체
-플로우를 검증하기 위한 용도.
+transport primitive 호출을 JSONL 페이로드로 기록하고, ``commit_files`` 에
+포함된 ``incidents/<id>.md`` 는 ``./output/incidents/<id>.md`` 로 실제
+파일로도 떨어뜨린다 (시연/디버깅용).
+
+``get_file_content`` 는 항상 FileNotFoundError 를 던져 pr_builder 가 markdown
+폴백 경로로 빠지게 한다 — dry-run 은 실제 base 파일을 보유하지 않으므로
+``git apply`` 검증이 무의미.
 """
 
 import json
@@ -12,7 +16,6 @@ from pathlib import Path
 from common.models import ResolutionReport
 
 from .base import GitHubClient, PullRequestResult
-from .report import branch_name, incident_markdown, pr_body, pr_title
 
 
 class DryRunGitHubClient(GitHubClient):
@@ -34,35 +37,70 @@ class DryRunGitHubClient(GitHubClient):
         repo: str,
         base_branch: str = "main",
     ) -> PullRequestResult:
-        branch = branch_name(report)
-        md = incident_markdown(report)
+        """이전 호출자 호환용 thin wrapper. 신규 호출자는 ``pr_builder.build_patch_pr`` 직접 사용."""
+        from .pr_builder import build_patch_pr
 
+        return build_patch_pr(self, report, repo, base_branch)
+
+    def get_file_content(self, repo: str, path: str, ref: str) -> str:
+        """dry-run 은 base 파일을 보유하지 않으므로 항상 FileNotFoundError.
+
+        pr_builder 가 이를 잡아 DiffApplyError 로 변환 → markdown 폴백.
+        """
+        raise FileNotFoundError(path)
+
+    def commit_files(
+        self,
+        repo: str,
+        branch: str,
+        base_branch: str,
+        files: dict[str, str],
+        message: str,
+    ) -> None:
+        # incidents/<id>.md 는 별도 파일로도 저장 (사람이 직접 열어보기 편하게)
         self._incidents_dir.mkdir(parents=True, exist_ok=True)
-        md_path = self._incidents_dir / f"{report.incident_id}.md"
-        md_path.write_text(md, encoding="utf-8")
+        for path, content in files.items():
+            if path.startswith("incidents/") and path.endswith(".md"):
+                md_path = self._incidents_dir / Path(path).name
+                md_path.write_text(content, encoding="utf-8")
 
         payload = {
+            "action": "commit_files",
+            "repo": repo,
+            "branch": branch,
+            "base": base_branch,
+            "message": message,
+            "files": [{"path": p, "size": len(c)} for p, c in files.items()],
+        }
+        self._append_payload(payload)
+
+    def open_pr(
+        self,
+        repo: str,
+        branch: str,
+        base_branch: str,
+        title: str,
+        body: str,
+    ) -> dict:
+        payload = {
+            "action": "open_pr",
             "repo": repo,
             "base": base_branch,
             "head": branch,
-            "title": pr_title(report),
-            "body": pr_body(report),
-            "files": [{"path": f"incidents/{report.incident_id}.md", "size": len(md)}],
+            "title": title,
+            "body": body,
         }
+        self._append_payload(payload)
+        url = f"dry-run://github/{repo}/pull?branch={branch}"
+        print(f"[GitHubClient:dry-run] {repo} ← PR 페이로드 기록")
+        return {"html_url": url, "number": None, "dry_run": True}
+
+    def close_pr(self, repo: str, pr_number: int, branch: str) -> None:
+        payload = {"action": "close_pr", "repo": repo, "pr_number": pr_number, "branch": branch}
+        self._append_payload(payload)
+        print(f"[GitHubClient:dry-run] {repo} close_pr #{pr_number} branch={branch}")
+
+    def _append_payload(self, payload: dict) -> None:
         self._payload_log.parent.mkdir(parents=True, exist_ok=True)
         with self._payload_log.open("a", encoding="utf-8") as f:
             f.write(json.dumps(payload, ensure_ascii=False) + "\n")
-
-        url = f"dry-run://github/{repo}/pull?branch={branch}"
-        print(f"[GitHubClient:dry-run] {repo} ← PR 페이로드 기록 (md: {md_path})")
-        return PullRequestResult(pr_url=url, pr_number=None, branch=branch, dry_run=True)
-
-    def close_pr(self, repo: str, pr_number: int, branch: str) -> None:
-        """dry-run — close 의도를 페이로드 로그에 append 한다."""
-        payload = {"action": "close_pr", "repo": repo, "pr_number": pr_number, "branch": branch}
-        self._payload_log.parent.mkdir(parents=True, exist_ok=True)
-        with self._payload_log.open("a", encoding="utf-8") as f:
-            import json as _json
-
-            f.write(_json.dumps(payload, ensure_ascii=False) + "\n")
-        print(f"[GitHubClient:dry-run] {repo} close_pr #{pr_number} branch={branch}")
