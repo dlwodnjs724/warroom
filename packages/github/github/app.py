@@ -28,13 +28,32 @@ def _classify_status(status_code: int, context: str) -> GitHubError:
     """HTTP status → 운영 의미가 분리된 예외.
 
     호출자는 ``GitHubAuthError`` (토큰/권한 — 재시도 무의미) 와
-    ``GitHubTransientError`` (5xx — 재시도 가치 있음) 를 구분해 surface 한다.
+    ``GitHubTransientError`` (5xx / 429 rate-limit — 재시도 가치 있음) 를
+    구분해 surface 한다.
+
+    참고: GitHub 의 *secondary* rate-limit 은 403 + ``X-RateLimit-Remaining: 0``
+    헤더로 오는데 — 현 구현은 본문 status 만 보므로 그 케이스는 ``GitHubAuthError``
+    로 분류된다. 운영에서 재시도 결정 시 헤더 확인 필요 (TODO: header-aware 분류).
     """
     if status_code in (401, 403):
         return GitHubAuthError(f"{context}: 인증/권한 실패 (status={status_code})", status_code)
-    if 500 <= status_code < 600:
-        return GitHubTransientError(f"{context}: GitHub 측 일시 장애 (status={status_code})", status_code)
+    if status_code == 429 or 500 <= status_code < 600:
+        return GitHubTransientError(
+            f"{context}: GitHub 측 일시 장애 / rate-limit (status={status_code})", status_code
+        )
     return GitHubError(f"{context}: HTTP {status_code}", status_code)
+
+
+def _check(resp: httpx.Response, context: str) -> None:
+    """비-2xx 응답을 ``_classify_status`` 가 분리한 예외로 변환.
+
+    bare ``resp.raise_for_status()`` 대체. 모든 transport primitive 가 이 한
+    helper 만 거치면 호출자가 토큰 만료 / rate-limit / 일시 장애를 동일 패턴
+    (``try/except GitHubAuthError / GitHubTransientError``) 으로 처리 가능.
+    """
+    if 200 <= resp.status_code < 300:
+        return
+    raise _classify_status(resp.status_code, context)
 
 
 class GitHubAppClient(GitHubClient):
@@ -71,7 +90,7 @@ class GitHubAppClient(GitHubClient):
         )
         if resp.status_code == 404:
             raise FileNotFoundError(path)
-        resp.raise_for_status()
+        _check(resp, f"GET /repos/{repo}/contents/{path}")
         data = resp.json()
         return base64.b64decode(data["content"]).decode("utf-8")
 
@@ -111,7 +130,7 @@ class GitHubAppClient(GitHubClient):
             headers=headers,
             json={"title": title, "head": branch, "base": base_branch, "body": body},
         )
-        resp.raise_for_status()
+        _check(resp, f"POST /repos/{repo}/pulls")
         return resp.json()
 
     def close_pr(self, repo: str, pr_number: int, branch: str) -> None:
@@ -176,7 +195,7 @@ class GitHubAppClient(GitHubClient):
                 "Accept": "application/vnd.github+json",
             },
         )
-        resp.raise_for_status()
+        _check(resp, f"POST /app/installations/{self._installation_id}/access_tokens")
         data = resp.json()
         self._token = data["token"]
         self._token_exp = time.time() + 3600
@@ -186,7 +205,7 @@ class GitHubAppClient(GitHubClient):
 
     def _base_sha(self, repo: str, branch: str, headers: dict) -> str:
         resp = self._http.get(f"{_API}/repos/{repo}/git/ref/heads/{branch}", headers=headers)
-        resp.raise_for_status()
+        _check(resp, f"GET /repos/{repo}/git/ref/heads/{branch}")
         return resp.json()["object"]["sha"]
 
     def _get_tree_sha(self, repo: str, commit_sha: str, headers: dict) -> str:
@@ -194,7 +213,7 @@ class GitHubAppClient(GitHubClient):
             f"{_API}/repos/{repo}/git/commits/{commit_sha}",
             headers=headers,
         )
-        resp.raise_for_status()
+        _check(resp, f"GET /repos/{repo}/git/commits/{commit_sha}")
         return resp.json()["tree"]["sha"]
 
     def _create_blob(self, repo: str, content: str, headers: dict) -> str:
@@ -204,7 +223,7 @@ class GitHubAppClient(GitHubClient):
             headers=headers,
             json={"content": encoded, "encoding": "base64"},
         )
-        resp.raise_for_status()
+        _check(resp, f"POST /repos/{repo}/git/blobs")
         return resp.json()["sha"]
 
     def _create_tree(
@@ -219,7 +238,7 @@ class GitHubAppClient(GitHubClient):
             headers=headers,
             json={"base_tree": base_tree, "tree": entries},
         )
-        resp.raise_for_status()
+        _check(resp, f"POST /repos/{repo}/git/trees")
         return resp.json()["sha"]
 
     def _create_commit(
@@ -235,7 +254,7 @@ class GitHubAppClient(GitHubClient):
             headers=headers,
             json={"message": message, "tree": tree_sha, "parents": [parent_sha]},
         )
-        resp.raise_for_status()
+        _check(resp, f"POST /repos/{repo}/git/commits")
         return resp.json()["sha"]
 
     def _create_branch(self, repo: str, branch: str, sha: str, headers: dict) -> None:
@@ -244,4 +263,4 @@ class GitHubAppClient(GitHubClient):
             headers=headers,
             json={"ref": f"refs/heads/{branch}", "sha": sha},
         )
-        resp.raise_for_status()
+        _check(resp, f"POST /repos/{repo}/git/refs (ref={branch})")

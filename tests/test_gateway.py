@@ -241,6 +241,48 @@ class TestRejectPrCleanup:
         assert body["pull_request"]["number"] == 77
         assert "pr_persist_warning" in body["pull_request"]
 
+    async def test_approve_open_pr_auth_error_surfaces_status_code(self, client, monkeypatch):
+        """approve 경로의 open_pr/commit_files 가 401/403 일 때 error_type=auth + status_code.
+
+        reject 경로와 대칭 — cold review MEDIUM 1 (transport 분류가 reject 만
+        대상이고 approve 는 raw httpx.HTTPStatusError 로 500 떨어지던 비대칭 차단).
+        """
+        from gateway.services import decisions as dec_mod
+        from github.base import GitHubAuthError
+
+        monkeypatch.setenv("GITHUB_REPO", "owner/demo")
+        incident_id = await self._seed_awaiting("INC-APPROVE-AUTH-1")
+
+        def boom(entry, client, github_repo):
+            raise GitHubAuthError("POST /repos/owner/demo/pulls: 인증 실패", 403)
+
+        monkeypatch.setattr(dec_mod, "_open_pr", boom)
+
+        resp = client.post(f"/incidents/{incident_id}/approve")
+        assert resp.status_code == 200
+        pr = resp.json()["pull_request"]
+        assert pr["error_type"] == "auth"
+        assert pr["status_code"] == 403
+
+    async def test_approve_open_pr_transient_error_surfaces_status_code(self, client, monkeypatch):
+        """approve 경로의 transport 가 5xx/429 일 때 error_type=transient + status_code."""
+        from gateway.services import decisions as dec_mod
+        from github.base import GitHubTransientError
+
+        monkeypatch.setenv("GITHUB_REPO", "owner/demo")
+        incident_id = await self._seed_awaiting("INC-APPROVE-TRANSIENT-1")
+
+        def boom(entry, client, github_repo):
+            raise GitHubTransientError("rate-limit", 429)
+
+        monkeypatch.setattr(dec_mod, "_open_pr", boom)
+
+        resp = client.post(f"/incidents/{incident_id}/approve")
+        assert resp.status_code == 200
+        pr = resp.json()["pull_request"]
+        assert pr["error_type"] == "transient"
+        assert pr["status_code"] == 429
+
     async def test_reject_close_pr_auth_error_surfaces_status_code(self, client, monkeypatch):
         """close_pr 가 401/403 일 때 error_type=auth + status_code 응답."""
         from gateway.dependencies import reset_github_client
@@ -297,13 +339,15 @@ class TestRejectPrCleanup:
         assert pr_closed["error_type"] == "transient"
         assert pr_closed["status_code"] == 502
 
-    async def test_reject_close_pr_runs_in_worker_thread(self, client, monkeypatch):
-        """close_pr (sync httpx) 가 async endpoint 의 이벤트 루프를 점유하지 않는다.
+    async def test_reject_close_pr_offloaded_via_to_thread(self, client, monkeypatch):
+        """close_pr (sync httpx) 가 ``asyncio.to_thread`` 로 워커 스레드 위임된다.
 
-        to_thread 위임을 검증하기 위해 close_pr 안에서 현재 스레드가 메인 스레드가
-        아님을 확인 — async path 의 이벤트 루프와 분리된 워커 스레드에서 실행됨.
+        FastAPI ``TestClient`` 자체가 endpoint 를 워커 스레드에서 돌리므로 "메인
+        스레드 != close_pr 스레드" 만 보면 to_thread 가 빠진 회귀도 통과한다
+        (cold review LOW 4). 직접적인 검증: ``asyncio.to_thread`` 를 monkeypatch
+        해 ``client.close_pr`` 가 그 인자로 들어갔는지 확인.
         """
-        import threading
+        import asyncio
 
         from gateway.dependencies import get_github_client, reset_github_client
         from gateway.infrastructure.db.repository import get_repository
@@ -315,22 +359,28 @@ class TestRejectPrCleanup:
         repo = get_repository()
         await repo.set_pr_info(incident_id, 88, "warroom/incident-THREAD")
 
-        main_thread = threading.get_ident()
-        observed: dict = {}
-
         ghc = get_github_client()
-        orig = ghc.close_pr
+        recorded: list[tuple] = []
+        orig_to_thread = asyncio.to_thread
 
-        def trace(repo, pr_number, branch):
-            observed["thread"] = threading.get_ident()
-            return orig(repo, pr_number, branch)
+        async def trace(func, *args, **kwargs):
+            recorded.append((func, args, kwargs))
+            return await orig_to_thread(func, *args, **kwargs)
 
-        monkeypatch.setattr(ghc, "close_pr", trace)
+        # decisions 모듈이 import 한 asyncio 를 가로채야 함 (module-local 참조).
+        monkeypatch.setattr("gateway.services.decisions.asyncio.to_thread", trace)
 
         resp = client.post(f"/incidents/{incident_id}/reject")
         assert resp.status_code == 200
-        # close_pr 호출 스레드 != 테스트 (main) 스레드 → to_thread 위임됨
-        assert observed["thread"] != main_thread
+        # close_pr 가 to_thread 의 첫 인자로 들어갔는지 — async.md § 1 회귀 차단.
+        # bound method 는 매 attribute access 마다 새 객체라 `is` 비교 불가 → `__func__` + `__self__`.
+        target_func = ghc.close_pr.__func__
+        target_self = ghc.close_pr.__self__
+        assert any(
+            getattr(call[0], "__func__", None) is target_func
+            and getattr(call[0], "__self__", None) is target_self
+            for call in recorded
+        ), f"to_thread 가 client.close_pr 로 호출되지 않음: {[c[0] for c in recorded]}"
 
 
 class TestWebhookSignatureVerification:

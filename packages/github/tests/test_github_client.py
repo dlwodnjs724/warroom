@@ -403,6 +403,58 @@ class TestAppClientPrimitives:
         assert issubclass(GitHubAuthError, GitHubError)
         assert issubclass(GitHubTransientError, GitHubError)
 
+    def test_429_rate_limit_classified_as_transient(self, tmp_path, monkeypatch):
+        """429 (primary rate-limit) 은 transient — 재시도 가치 있음 (cold review LOW 2)."""
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_install"}),
+                FakeResponse(status_code=429, payload={}),
+            ]
+        )
+        client = _make_app_client(tmp_path, monkeypatch, http)
+        with pytest.raises(GitHubTransientError) as exc:
+            client.close_pr("toby/demo", 42, "x")
+        assert exc.value.status_code == 429
+
+    def test_open_pr_403_raises_auth_error(self, tmp_path, monkeypatch):
+        """approve 경로 transport (open_pr) 도 close_pr 와 동일 분류 — cold review MEDIUM 1."""
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_install"}),
+                FakeResponse(status_code=403, payload={}),
+            ]
+        )
+        client = _make_app_client(tmp_path, monkeypatch, http)
+        with pytest.raises(GitHubAuthError) as exc:
+            client.open_pr("toby/demo", "head", "main", "t", "b")
+        assert exc.value.status_code == 403
+
+    def test_commit_files_5xx_raises_transient_error(self, tmp_path, monkeypatch):
+        """commit_files 의 Git Data API 단계도 분류된 예외 — MEDIUM 1 후속."""
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_install"}),
+                FakeResponse(status_code=502, payload={}),  # _base_sha 단계에서 502
+            ]
+        )
+        client = _make_app_client(tmp_path, monkeypatch, http)
+        with pytest.raises(GitHubTransientError) as exc:
+            client.commit_files("toby/demo", "head", "main", {"a.py": "x"}, "msg")
+        assert exc.value.status_code == 502
+
+    def test_get_file_content_401_raises_auth_error(self, tmp_path, monkeypatch):
+        """get_file_content non-404 도 분류 — 404 만 FileNotFoundError 유지."""
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_install"}),
+                FakeResponse(status_code=401, payload={}),
+            ]
+        )
+        client = _make_app_client(tmp_path, monkeypatch, http)
+        with pytest.raises(GitHubAuthError) as exc:
+            client.get_file_content("toby/demo", "a.py", "main")
+        assert exc.value.status_code == 401
+
     def test_token_is_cached_across_calls(self, tmp_path, monkeypatch):
         http = FakeHttp(
             [
