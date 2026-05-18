@@ -17,7 +17,7 @@ import pytest
 from common.clock import APP_TZ
 from common.models import ResolutionReport, Severity
 from github.app import GitHubAppClient
-from github.base import GitHubClient
+from github.base import GitHubAuthError, GitHubClient, GitHubError, GitHubTransientError
 from github.dry_run import DryRunGitHubClient
 from github.factory import make_github_client
 from github.pr_builder import build_patch_pr
@@ -85,6 +85,19 @@ class TestDryRun:
             "repo": "toby/demo",
             "pr_number": 99,
             "branch": "warroom/incident-X",
+        }
+
+    def test_delete_branch_records_action(self, tmp_path):
+        client = DryRunGitHubClient(
+            payload_log=str(tmp_path / "gh.jsonl"),
+            incidents_dir=str(tmp_path / "incidents"),
+        )
+        client.delete_branch("toby/demo", "warroom/orphan-Y")
+        line = json.loads((tmp_path / "gh.jsonl").read_text().splitlines()[0])
+        assert line == {
+            "action": "delete_branch",
+            "repo": "toby/demo",
+            "branch": "warroom/orphan-Y",
         }
 
 
@@ -301,6 +314,95 @@ class TestAppClientPrimitives:
         client = _make_app_client(tmp_path, monkeypatch, http)
         client.close_pr("toby/demo", 42, "x")  # 예외 없어야 한다
 
+    def test_close_pr_401_raises_auth_error(self, tmp_path, monkeypatch):
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_install"}),
+                FakeResponse(status_code=401, payload={}),
+            ]
+        )
+        client = _make_app_client(tmp_path, monkeypatch, http)
+        with pytest.raises(GitHubAuthError) as exc:
+            client.close_pr("toby/demo", 42, "x")
+        assert exc.value.status_code == 401
+
+    def test_close_pr_403_raises_auth_error(self, tmp_path, monkeypatch):
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_install"}),
+                FakeResponse(status_code=403, payload={}),
+            ]
+        )
+        client = _make_app_client(tmp_path, monkeypatch, http)
+        with pytest.raises(GitHubAuthError) as exc:
+            client.close_pr("toby/demo", 42, "x")
+        assert exc.value.status_code == 403
+
+    def test_close_pr_5xx_raises_transient_error(self, tmp_path, monkeypatch):
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_install"}),
+                FakeResponse(status_code=502, payload={}),
+            ]
+        )
+        client = _make_app_client(tmp_path, monkeypatch, http)
+        with pytest.raises(GitHubTransientError) as exc:
+            client.close_pr("toby/demo", 42, "x")
+        assert exc.value.status_code == 502
+
+    def test_close_pr_branch_delete_5xx_raises_transient_error(self, tmp_path, monkeypatch):
+        """PR close 는 성공해도 branch DELETE 가 5xx 면 transient surface."""
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_install"}),
+                FakeResponse(status_code=200, payload={}),
+                FakeResponse(status_code=503, payload={}),
+            ]
+        )
+        client = _make_app_client(tmp_path, monkeypatch, http)
+        with pytest.raises(GitHubTransientError) as exc:
+            client.close_pr("toby/demo", 42, "x")
+        assert exc.value.status_code == 503
+
+    def test_delete_branch_calls_delete_ref(self, tmp_path, monkeypatch):
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_install"}),
+                FakeResponse(status_code=204, payload={}),
+            ]
+        )
+        client = _make_app_client(tmp_path, monkeypatch, http)
+        client.delete_branch("toby/demo", "warroom/orphan")
+        method, url, _, _ = http.calls[1]
+        assert method == "DELETE"
+        assert url == "https://api.github.com/repos/toby/demo/git/refs/heads/warroom/orphan"
+
+    def test_delete_branch_tolerates_404(self, tmp_path, monkeypatch):
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_install"}),
+                FakeResponse(status_code=404, payload={}),
+            ]
+        )
+        client = _make_app_client(tmp_path, monkeypatch, http)
+        client.delete_branch("toby/demo", "warroom/already-gone")  # silent
+
+    def test_delete_branch_401_raises_auth_error(self, tmp_path, monkeypatch):
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_install"}),
+                FakeResponse(status_code=401, payload={}),
+            ]
+        )
+        client = _make_app_client(tmp_path, monkeypatch, http)
+        with pytest.raises(GitHubAuthError):
+            client.delete_branch("toby/demo", "warroom/x")
+
+    def test_github_error_hierarchy(self):
+        """Auth/Transient 둘 다 GitHubError 상속 — 호출자가 broad except 가능."""
+        assert issubclass(GitHubAuthError, GitHubError)
+        assert issubclass(GitHubTransientError, GitHubError)
+
     def test_token_is_cached_across_calls(self, tmp_path, monkeypatch):
         http = FakeHttp(
             [
@@ -358,6 +460,9 @@ class FakeClient(GitHubClient):
 
     def close_pr(self, repo: str, pr_number: int, branch: str) -> None:
         self.closed.append((repo, pr_number, branch))
+
+    def delete_branch(self, repo: str, branch: str) -> None:
+        self.closed.append((repo, None, branch))
 
 
 class TestPrBuilderDiffPath:

@@ -6,6 +6,9 @@
 구현체:
 - ``GitHubAppClient`` (운영): JWT + installation token + REST 호출
 - ``DryRunGitHubClient`` (개발 폴백): JSONL 페이로드 + 로컬 파일 출력
+
+에러 클래스는 호출자가 운영 대응을 분기할 수 있게 status 별 의미를 좁힌다 —
+401/403 (auth) 은 토큰/권한 문제, 5xx (transient) 는 잠시 후 재시도 가능.
 """
 
 from dataclasses import dataclass
@@ -18,6 +21,30 @@ class PullRequestResult:
     pr_number: int | None
     branch: str
     dry_run: bool
+
+
+class GitHubError(RuntimeError):
+    """GitHub transport 호출에서 발생한 HTTP 실패.
+
+    ``status_code`` 를 보존해 호출자가 운영 분기 (토큰 재발급 / 권한 점검 /
+    재시도 큐) 를 결정할 수 있게 한다.
+    """
+
+    def __init__(self, message: str, status_code: int):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class GitHubAuthError(GitHubError):
+    """401 / 403 — installation token 만료, 권한 부족, App 설정 문제.
+
+    재시도해도 그대로 실패. 운영자가 토큰 회전 / App 권한 재발급 / repo
+    접근 권한 확인을 해야 한다.
+    """
+
+
+class GitHubTransientError(GitHubError):
+    """5xx — GitHub 측 일시 장애 / 레이트리밋. 잠시 후 재시도 가능."""
 
 
 class GitHubClient(Protocol):
@@ -70,7 +97,15 @@ class GitHubClient(Protocol):
     def close_pr(self, repo: str, pr_number: int, branch: str) -> None:
         """반려된 인시던트의 PR 을 close 하고 branch 도 삭제.
 
-        404 / 이미 닫힌 PR 등 멱등 처리. 호출자 (decisions service) 가
-        예외에 의존하지 않도록 best-effort 로 구현.
+        멱등 케이스 (404 = 이미 닫힘 / 422 = 이미 처리) 는 silent.
+        401/403 은 ``GitHubAuthError``, 5xx 는 ``GitHubTransientError`` 로
+        분류해 호출자가 운영 대응을 분기할 수 있게 한다.
+        """
+        ...
+
+    def delete_branch(self, repo: str, branch: str) -> None:
+        """branch 단독 삭제. ``open_pr`` 실패 후 orphan branch cleanup 용.
+
+        멱등 — 404 / 422 는 silent. 401/403 / 5xx 는 ``GitHubError`` 분류.
         """
         ...

@@ -89,6 +89,11 @@ class DryRunGitHubClient(GitHubClient):
         self._append_payload(payload)
         print(f"[GitHubClient:dry-run] {repo} close_pr #{pr_number} branch={branch}")
 
+    def delete_branch(self, repo: str, branch: str) -> None:
+        payload = {"action": "delete_branch", "repo": repo, "branch": branch}
+        self._append_payload(payload)
+        print(f"[GitHubClient:dry-run] {repo} delete_branch {branch}")
+
     def _append_payload(self, payload: dict) -> None:
         self._payload_log.parent.mkdir(parents=True, exist_ok=True)
         with self._payload_log.open("a", encoding="utf-8") as f:
