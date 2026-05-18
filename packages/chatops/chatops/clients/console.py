@@ -1,6 +1,6 @@
 from common.models import IncidentEvent, ResolutionReport
 
-from .base import Notifier
+from ..base import Notifier
 
 
 class ConsoleNotifier(Notifier):

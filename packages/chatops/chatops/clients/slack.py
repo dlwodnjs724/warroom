@@ -28,7 +28,7 @@ import httpx
 from common.models import IncidentEvent, ResolutionReport
 from common.redact import redact_secrets
 
-from .base import Notifier
+from ..base import Notifier
 
 _SEV_EMOJI = {
     "CRITICAL": "🔥",

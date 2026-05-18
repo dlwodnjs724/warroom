@@ -16,10 +16,10 @@ from datetime import datetime
 import pytest
 from common.clock import APP_TZ
 from common.models import ResolutionReport, Severity
-from github.app import GitHubAppClient
 from github.base import GitHubAuthError, GitHubClient, GitHubError, GitHubTransientError
-from github.dry_run import DryRunGitHubClient
-from github.factory import make_github_client
+from github.clients.app import GitHubAppClient
+from github.clients.dry_run import DryRunGitHubClient
+from github.clients.factory import make_github_client
 from github.pr_builder import build_patch_pr
 
 
@@ -173,7 +173,7 @@ class FakeHttp:
 
 
 def _make_app_client(tmp_path, monkeypatch, http: FakeHttp) -> GitHubAppClient:
-    monkeypatch.setattr("github.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")
+    monkeypatch.setattr("github.clients.app.jwt.encode", lambda payload, key, algorithm: "fake.jwt.token")
     pem = tmp_path / "key.pem"
     pem.write_text(_FAKE_KEY)
     return GitHubAppClient(

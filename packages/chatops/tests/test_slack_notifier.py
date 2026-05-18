@@ -7,7 +7,7 @@ import json
 from datetime import datetime
 
 import pytest
-from chatops.slack import SlackNotifier, _truncate
+from chatops.clients.slack import SlackNotifier, _truncate
 from common.clock import APP_TZ
 from common.models import IncidentEvent, ResolutionReport, Severity
 
