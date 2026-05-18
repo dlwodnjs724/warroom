@@ -10,8 +10,8 @@
 
 > **새 세션이 가장 먼저 볼 영역.** Phase 완료 / 우선순위 변경 시 즉시 갱신.
 
-- **마지막 완료**: **PR reliability bundle** 머지 (PR #8, 2026-05-18) — #5 async to_thread + close_pr observability + #7 orphan branch cleanup. cold-context 리뷰 4 findings 모두 반영 (MEDIUM 1 분류 비대칭 차단 + LOW 2/3/4). 170 tests pass
-- **이전 완료**: Architecture follow-up bundle (PR #6) — #2/#3/#4. Phase 4 (PR #1) — unified diff PR + redaction + reject cleanup
+- **마지막 완료**: **Convention codify + clients/ 그룹핑** (PR #9, 2026-05-18) — github/chatops 의 client 구현을 `clients/` 디렉터리로 분리 + layering.md §4a (패키지 내부 layer) / §4b (external adapter error 계층) / §4c (composition root) 명문화 + agents.md 신설 (sub-agent + cold review workflow)
+- **이전 완료**: PR reliability bundle (PR #8) — #5 async + #7 orphan cleanup. Architecture follow-up bundle (PR #6) — #2/#3/#4. Phase 4 (PR #1) — unified diff PR
 - **모든 follow-up 이슈 closed**: #2 #3 #4 #5 #7 (5건). Phase 4 후속 architectural debt 정리 완료
 - **다음 1순위**: **Phase 3** — Slack Interactivity (Approve 버튼 핸들러). demo 완결성 가장 큰 임팩트
 - **다음 2순위**: **Phase 4.0 / 6.2** — Mock → Real Sentry/GitHub tool. demo 흐름은 mock 으로 작동하나 LLM 분석 품질 ↑ 필요
@@ -328,16 +328,14 @@ flowchart LR
 
 ## 8. Agent 활용 지점
 
-대부분은 직접 진행 (코드베이스 작음·작업 직렬·사용자 검토 루프 우선). 다음 3 지점에서만 subagent 활용:
+운영 룰은 `.claude/rules/agents.md` 단일 소스. 본 문서는 Phase 매핑만:
 
-| 지점 | 이유 | 어떤 에이전트 | 상태 |
-|---|---|---|---|
-| Phase 4.1~4.2 LLM 프롬프트 튜닝 | 출력 포맷 강제·검증이 open-ended | `general-purpose` (worktree 격리) | ✅ 미사용으로 진행 (직접 1회 통과) |
-| Phase 4 머지 직전 cold-context 리뷰 | self-review blind spot 차단 — 2-round | `general-purpose` 2회 (1차 코드 / 2차 architecture) | ✅ 완료, 5+4 findings, HIGH 4건 즉시 반영 |
-| Phase 3 완료 후 보안 리뷰 | 서명 검증·replay 방지·권한 누락 cold review 의 강점 | `general-purpose` 1회 | ⬜ Phase 3 진입 후 |
-| Phase 5.4 발표자료 다듬기 | 본 작업과 독립, 병렬 가능 | `general-purpose` | ⬜ |
-
-**검증된 패턴**: 큰 흐름 머지 전 cold-context sub-agent 2-round (code → architecture) 가 self-review 만으로는 못 잡는 redaction-vs-diff 충돌, DI 부재, 책임 비대 등을 잡아냄. 비용 대비 ROI 가 명확하므로 Phase 3 머지 직전에도 동일 패턴 권장.
+| 지점 | 상태 |
+|---|---|
+| **Cold-context review** (non-trivial PR 기본 단계) | ✅ 4회 검증 (PR #1 / #6 / #8 머지 직전) — production-grade finding 매번 |
+| Architecture refactor bundle (충돌 매트릭스가 worktree 단일 권장 시) | ✅ 2회 검증 (PR #6 #2/#3/#4, PR #8 #5/#7) |
+| Phase 3 (Slack Interactivity) 머지 직전 보안 리뷰 | ⬜ Phase 3 진입 후 (서명 검증·replay 방지·권한 누락 cold review 강점) |
+| Phase 5.4 발표자료 다듬기 | ⬜ 본 작업과 독립, 병렬 가능 |
 
 ---
 
