@@ -3188,6 +3188,7 @@ dependencies = [
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "uvicorn" },
     { name = "warroom-common" },
+    { name = "warroom-github" },
 ]
 
 [package.metadata]
@@ -3200,6 +3201,7 @@ requires-dist = [
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
     { name = "uvicorn" },
     { name = "warroom-common", virtual = "packages/common" },
+    { name = "warroom-github", virtual = "packages/github" },
 ]
 
 [[package]]

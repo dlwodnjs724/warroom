@@ -8,6 +8,7 @@ dependencies = [
     "uvicorn",
     "python-dotenv",
     "warroom-common",
+    "warroom-github",
     "sqlalchemy[asyncio]>=2.0",
     "aiosqlite>=0.20",
     "asyncmy>=0.2",
@@ -16,3 +17,4 @@ dependencies = [
 
 [tool.uv.sources]
 warroom-common = { workspace = true }
+warroom-github = { workspace = true }
