@@ -10,7 +10,7 @@
 
 > **새 세션이 가장 먼저 볼 영역.** Phase 완료 / 우선순위 변경 시 즉시 갱신.
 
-- **마지막 완료**: **Convention codify + clients/ 그룹핑** (PR #9, 2026-05-18) — github/chatops 의 client 구현을 `clients/` 디렉터리로 분리 + layering.md §4a (패키지 내부 layer) / §4b (external adapter error 계층) / §4c (composition root) 명문화 + agents.md 신설 (sub-agent + cold review workflow)
+- **마지막 완료**: **Convention codify + clients/ 그룹핑** 머지 (PR #9, 2026-05-18) — github/chatops 의 client 구현을 `clients/` 디렉터리로 분리 + layering.md §4a (패키지 내부 layer) / §4b (external adapter error 계층) / §4c (composition root) 명문화 + agents.md 신설 (sub-agent + cold review workflow). 170 tests pass
 - **이전 완료**: PR reliability bundle (PR #8) — #5 async + #7 orphan cleanup. Architecture follow-up bundle (PR #6) — #2/#3/#4. Phase 4 (PR #1) — unified diff PR
 - **모든 follow-up 이슈 closed**: #2 #3 #4 #5 #7 (5건). Phase 4 후속 architectural debt 정리 완료
 - **다음 1순위**: **Phase 3** — Slack Interactivity (Approve 버튼 핸들러). demo 완결성 가장 큰 임팩트
