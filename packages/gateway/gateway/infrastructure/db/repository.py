@@ -55,6 +55,7 @@ class IncidentRepository:
         incident_id: str,
         status: IncidentStatus,
         is_approved: bool | None = None,
+        rejection_reason: str | None = None,
     ) -> None:
         sf = get_session_factory()
         async with sf() as s:
@@ -62,6 +63,8 @@ class IncidentRepository:
             if not incident:
                 return
             incident.status = status.value if hasattr(status, "value") else status
+            if rejection_reason is not None:
+                incident.rejection_reason = rejection_reason
             if is_approved is not None:
                 report = await s.get(Report, incident_id)
                 if report:
@@ -170,6 +173,7 @@ def _incident_to_dict(incident: Incident, report: Report | None) -> dict:
         "slack_ts": incident.slack_ts,
         "pr_number": incident.pr_number,
         "pr_branch": incident.pr_branch,
+        "rejection_reason": incident.rejection_reason,
         "report": _report_to_dict(report) if report else None,
     }
 

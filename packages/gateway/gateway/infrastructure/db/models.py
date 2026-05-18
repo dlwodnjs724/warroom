@@ -28,6 +28,8 @@ class Incident(Base):
     # GitHub PR 영속화 — 거절 시 close + branch 삭제 위해 필요 (Phase 4.5)
     pr_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     pr_branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # 반려 사유 — Slack reject modal 에서 캡쳐 (Phase 3.5). 추후 재분석 시 컨텍스트 주입용.
+    rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     report: Mapped["Report | None"] = relationship(
         back_populates="incident",
