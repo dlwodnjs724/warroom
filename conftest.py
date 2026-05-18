@@ -24,6 +24,7 @@ def _isolate_db(monkeypatch):
         "GITHUB_INSTALLATION_ID",
         "SLACK_BOT_TOKEN",
         "SLACK_CHANNEL",
+        "SLACK_SIGNING_SECRET",
     ):
         monkeypatch.delenv(var, raising=False)
 
