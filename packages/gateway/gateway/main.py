@@ -15,8 +15,14 @@ from fastapi import FastAPI
 load_dotenv()
 
 from gateway.api.incidents import router as incidents_router
+from gateway.api.slack import router as slack_router
 from gateway.api.webhooks import router as webhooks_router
-from gateway.dependencies import get_github_client, get_github_repo, reset_github_client
+from gateway.dependencies import (
+    get_github_client,
+    get_github_repo,
+    reset_github_client,
+    reset_slack_notifier,
+)
 from gateway.infrastructure.db.session import current_url, init_schema, is_sqlite_backend
 from gateway.infrastructure.monitors.security import warn_if_secrets_missing
 from gateway.services.pipeline import set_main_loop
@@ -39,12 +45,17 @@ async def lifespan(app: FastAPI):
     get_github_client()
     print(f"[WARROOM] GitHub client 초기화 (GITHUB_REPO={get_github_repo() or '미설정'})")
 
+    # Slack interactivity 전용 notifier 도 lifespan 마다 초기화 (env 갱신 반영).
+    reset_slack_notifier()
+
     yield
     print("[WARROOM] Gateway 종료")
     set_main_loop(None)
     reset_github_client()
+    reset_slack_notifier()
 
 
 app = FastAPI(title="Warroom Event Gateway", lifespan=lifespan)
 app.include_router(webhooks_router)
 app.include_router(incidents_router)
+app.include_router(slack_router)
