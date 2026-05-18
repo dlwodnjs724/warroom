@@ -3,7 +3,11 @@
 import hashlib
 import hmac
 
-from gateway.infrastructure.monitors.security import verify_datadog_token, verify_sentry_signature
+from gateway.infrastructure.monitors.security import (
+    verify_datadog_token,
+    verify_sentry_signature,
+    verify_slack_signature,
+)
 
 
 def _sign(secret: str, body: bytes) -> str:
@@ -53,3 +57,54 @@ class TestDatadogToken:
     def test_rejects_missing_token_when_expected(self, monkeypatch):
         monkeypatch.setenv("WARROOM_DATADOG_TOKEN", "shared-token-xyz")
         assert verify_datadog_token(None) is False
+
+
+def _slack_sign(secret: str, body: bytes, ts: str) -> str:
+    base = f"v0:{ts}:".encode() + body
+    return "v0=" + hmac.new(secret.encode("utf-8"), base, hashlib.sha256).hexdigest()
+
+
+class TestSlackSignature:
+    SECRET = "slack-signing-secret"
+    BODY = b"payload=%7B%22type%22%3A%22block_actions%22%7D"
+    NOW = 1_700_000_000.0
+
+    def test_skips_when_secret_missing(self, monkeypatch):
+        monkeypatch.delenv("SLACK_SIGNING_SECRET", raising=False)
+        assert verify_slack_signature(self.BODY, None, None) is True
+        assert verify_slack_signature(self.BODY, "v0=anything", "0") is True
+
+    def test_accepts_valid_signature(self, monkeypatch):
+        monkeypatch.setenv("SLACK_SIGNING_SECRET", self.SECRET)
+        ts = str(int(self.NOW))
+        sig = _slack_sign(self.SECRET, self.BODY, ts)
+        assert verify_slack_signature(self.BODY, sig, ts, now=self.NOW) is True
+
+    def test_rejects_invalid_signature(self, monkeypatch):
+        monkeypatch.setenv("SLACK_SIGNING_SECRET", self.SECRET)
+        ts = str(int(self.NOW))
+        assert verify_slack_signature(self.BODY, "v0=deadbeef", ts, now=self.NOW) is False
+
+    def test_rejects_missing_signature_when_secret_set(self, monkeypatch):
+        monkeypatch.setenv("SLACK_SIGNING_SECRET", self.SECRET)
+        assert verify_slack_signature(self.BODY, None, "0", now=self.NOW) is False
+
+    def test_rejects_missing_timestamp(self, monkeypatch):
+        monkeypatch.setenv("SLACK_SIGNING_SECRET", self.SECRET)
+        assert verify_slack_signature(self.BODY, "v0=abc", None, now=self.NOW) is False
+
+    def test_rejects_replay_outside_window(self, monkeypatch):
+        monkeypatch.setenv("SLACK_SIGNING_SECRET", self.SECRET)
+        old_ts = str(int(self.NOW) - 60 * 6)  # 6분 전
+        sig = _slack_sign(self.SECRET, self.BODY, old_ts)
+        assert verify_slack_signature(self.BODY, sig, old_ts, now=self.NOW) is False
+
+    def test_rejects_non_integer_timestamp(self, monkeypatch):
+        monkeypatch.setenv("SLACK_SIGNING_SECRET", self.SECRET)
+        assert verify_slack_signature(self.BODY, "v0=abc", "not-a-number", now=self.NOW) is False
+
+    def test_rejects_when_body_tampered(self, monkeypatch):
+        monkeypatch.setenv("SLACK_SIGNING_SECRET", self.SECRET)
+        ts = str(int(self.NOW))
+        sig = _slack_sign(self.SECRET, self.BODY, ts)
+        assert verify_slack_signature(b"payload=tampered", sig, ts, now=self.NOW) is False
