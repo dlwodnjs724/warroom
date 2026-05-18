@@ -13,7 +13,8 @@ Slack: HMAC-SHA256("v0:{ts}:{body}", SLACK_SIGNING_SECRET) → X-Slack-Signature
 import hashlib
 import hmac
 import os
-import time
+
+from common.clock import now as _now
 
 _SLACK_REPLAY_WINDOW_SEC = 60 * 5
 
@@ -41,8 +42,6 @@ def verify_slack_signature(
     body: bytes,
     signature: str | None,
     timestamp: str | None,
-    *,
-    now: float | None = None,
 ) -> bool:
     """Slack Interactivity / Events 페이로드 서명 검증.
 
@@ -51,7 +50,8 @@ def verify_slack_signature(
     ±5분 이내인지 추가 확인 (Slack 공식 권고).
 
     secret 미설정 시 dev 모드로 skip (sentry/datadog 패턴과 동일).
-    ``now`` 인자는 테스트용 — 운영 호출은 ``time.time()`` 사용.
+    현재 시각은 ``common.clock.now()`` 단일 소스 — 테스트는
+    ``monkeypatch.setattr("common.clock.now", ...)`` 로 mock (datetime.md § 1).
     """
     secret = os.getenv("SLACK_SIGNING_SECRET")
     if not secret:
@@ -62,7 +62,7 @@ def verify_slack_signature(
         ts = int(timestamp)
     except ValueError:
         return False
-    current = now if now is not None else time.time()
+    current = _now().timestamp()
     if abs(current - ts) > _SLACK_REPLAY_WINDOW_SEC:
         return False
     basestring = f"v0:{timestamp}:".encode() + body

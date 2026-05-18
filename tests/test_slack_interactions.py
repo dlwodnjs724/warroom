@@ -11,10 +11,22 @@ handle_decision 의 PR 생성/cleanup 은 dry-run GitHub client 가 처리 (이�
 import hashlib
 import hmac
 import json
+from datetime import datetime
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
+
+# Slack 서명 replay 윈도우 (±5분) 검사의 결정성 확보를 위해 단일 시각 고정.
+_FROZEN_EPOCH = 1_700_000_000
+
+
+@pytest.fixture(autouse=True)
+def _freeze_clock(monkeypatch):
+    """``common.clock.now`` 를 고정 — verify_slack_signature 의 replay 검사가 매번 같은 결과."""
+    frozen = datetime.fromtimestamp(_FROZEN_EPOCH, tz=ZoneInfo("UTC"))
+    monkeypatch.setattr("gateway.infrastructure.monitors.security._now", lambda: frozen)
 
 
 @pytest.fixture
@@ -31,9 +43,10 @@ def _slack_sign(secret: str, body: bytes, ts: str) -> str:
     return "v0=" + hmac.new(secret.encode("utf-8"), base, hashlib.sha256).hexdigest()
 
 
-def _send(client, body: bytes, *, secret: str | None = None, ts: str = "1700000000"):
+def _send(client, body: bytes, *, secret: str | None = None, ts: str | None = None):
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     if secret:
+        ts = ts or str(_FROZEN_EPOCH)
         headers["X-Slack-Signature"] = _slack_sign(secret, body, ts)
         headers["X-Slack-Request-Timestamp"] = ts
     return client.post("/slack/interactions", content=body, headers=headers)
@@ -84,9 +97,8 @@ class TestSignatureVerification:
 
     def test_rejects_tampered_body(self, client, monkeypatch):
         monkeypatch.setenv("SLACK_SIGNING_SECRET", self.SECRET)
-        import time
 
-        ts = str(int(time.time()))
+        ts = str(_FROZEN_EPOCH)
         original = _form_body({"type": "block_actions", "actions": []})
         sig = _slack_sign(self.SECRET, original, ts)
         # 서명은 original 기반, body 는 다른 값
@@ -100,11 +112,8 @@ class TestSignatureVerification:
 
     def test_accepts_valid_signature(self, client, monkeypatch):
         monkeypatch.setenv("SLACK_SIGNING_SECRET", self.SECRET)
-        import time
-
-        ts = str(int(time.time()))
         body = _form_body({"type": "block_actions", "actions": []})
-        resp = _send(client, body, secret=self.SECRET, ts=ts)
+        resp = _send(client, body, secret=self.SECRET)
         # block_actions with empty actions → 200 (no-op)
         assert resp.status_code == 200
 

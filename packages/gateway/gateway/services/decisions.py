@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime
 
 from common.models import IncidentCategory, IncidentStatus, ResolutionReport, Severity
+from common.redact import redact_secrets
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 from github.base import GitHubAuthError, GitHubClient, GitHubError, GitHubTransientError
@@ -11,6 +12,11 @@ from github.pr_builder import build_patch_pr
 
 from gateway.dependencies import get_github_client, get_github_repo
 from gateway.infrastructure.db.repository import get_repository
+
+# rejection_reason 은 Slack modal 자유 입력 → DB 영속화 + HTTP 응답 echo + 추후 LLM
+# 컨텍스트 주입 (재분석 hook 도입 시) 까지 흐르므로, secrets.md § 3 의 redaction
+# 정책 대상. 영속화/응답 직전 단일 지점 (handle_decision) 에서 통과시킨다.
+_REJECT_REASON_MAX = 4000  # Slack plain_text_input 기본 한도 ~3000자 + 여유
 
 
 async def handle_decision(
@@ -29,7 +35,12 @@ async def handle_decision(
         )
 
     status = IncidentStatus.APPROVED if approved else IncidentStatus.REJECTED
-    reason_to_persist = rejection_reason if not approved else None
+    # approve 경로는 reason 입력 무시. reject 경로는 redact (secret 패턴 마스킹) →
+    # 길이 캡 (DoS / column blowup 방지) → 영속화. None / 빈 문자열은 영속화 skip.
+    reason_to_persist: str | None = None
+    if not approved and rejection_reason:
+        redacted = redact_secrets(rejection_reason)
+        reason_to_persist = redacted[:_REJECT_REASON_MAX]
     await repo.update_status(
         incident_id,
         status,
