@@ -13,7 +13,11 @@ from gateway.dependencies import get_github_client, get_github_repo
 from gateway.infrastructure.db.repository import get_repository
 
 
-async def handle_decision(incident_id: str, approved: bool) -> JSONResponse:
+async def handle_decision(
+    incident_id: str,
+    approved: bool,
+    rejection_reason: str | None = None,
+) -> JSONResponse:
     repo = get_repository()
     entry = await repo.get(incident_id)
     if not entry:
@@ -25,16 +29,27 @@ async def handle_decision(incident_id: str, approved: bool) -> JSONResponse:
         )
 
     status = IncidentStatus.APPROVED if approved else IncidentStatus.REJECTED
-    await repo.update_status(incident_id, status, is_approved=approved)
+    reason_to_persist = rejection_reason if not approved else None
+    await repo.update_status(
+        incident_id,
+        status,
+        is_approved=approved,
+        rejection_reason=reason_to_persist,
+    )
 
     action = "승인" if approved else "반려"
-    print(f"[WARROOM] 인시던트 {incident_id} {action} 처리 완료")
+    if reason_to_persist:
+        print(f"[WARROOM] 인시던트 {incident_id} {action} 처리 완료 (사유: {reason_to_persist})")
+    else:
+        print(f"[WARROOM] 인시던트 {incident_id} {action} 처리 완료")
 
     response: dict[str, object] = {
         "incident_id": incident_id,
         "status": status,
         "action": action,
     }
+    if reason_to_persist:
+        response["rejection_reason"] = reason_to_persist
 
     github_client = get_github_client()
     github_repo = get_github_repo()
