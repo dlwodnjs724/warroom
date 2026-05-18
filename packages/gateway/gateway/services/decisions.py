@@ -1,11 +1,12 @@
 """Human-in-the-Loop 승인/반려 결정 + 승인 시 GitHub PR 트리거."""
 
+import asyncio
 from datetime import datetime
 
 from common.models import IncidentCategory, IncidentStatus, ResolutionReport, Severity
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
-from github.base import GitHubClient
+from github.base import GitHubAuthError, GitHubClient, GitHubError, GitHubTransientError
 from github.pr_builder import build_patch_pr
 
 from gateway.dependencies import get_github_client, get_github_repo
@@ -39,7 +40,9 @@ async def handle_decision(incident_id: str, approved: bool) -> JSONResponse:
     github_repo = get_github_repo()
 
     if approved:
-        pr_result = _open_pr(entry, github_client, github_repo)
+        # _open_pr 는 sync (build_patch_pr 내부가 sync httpx). async endpoint 의
+        # 이벤트 루프 점유를 피하려면 to_thread 위임 — 1초 룰 / async.md § 1.
+        pr_result = await asyncio.to_thread(_open_pr, entry, github_client, github_repo)
         if pr_result and isinstance(pr_result.get("number"), int) and pr_result.get("branch"):
             # PR 은 이미 GitHub 에 만들어졌으므로 DB 영속화 실패가 endpoint
             # 전체를 500 으로 떨어뜨리면 PR 이 고아 (DB 모르고 GitHub 만 알고
@@ -70,7 +73,13 @@ async def _close_pr_if_exists(
     client: GitHubClient,
     github_repo: str | None,
 ) -> dict | None:
-    """반려 시 영속화된 PR 정보가 있으면 close + branch 삭제 (Phase 4.5)."""
+    """반려 시 영속화된 PR 정보가 있으면 close + branch 삭제 (Phase 4.5).
+
+    sync httpx 호출은 ``asyncio.to_thread`` 로 위임 (이벤트 루프 비점유).
+    실패는 HTTP status 기반으로 분류해 응답 dict 에 ``error_type`` /
+    ``status_code`` 를 surface 한다 — 운영자가 401 (토큰 회전 필요) /
+    403 (권한) / 5xx (transient — 재시도 가치) 를 구분할 수 있게.
+    """
     if not github_repo:
         return None
 
@@ -81,10 +90,52 @@ async def _close_pr_if_exists(
     pr_number, branch = pr_info
 
     try:
-        client.close_pr(github_repo, pr_number, branch)
+        await asyncio.to_thread(client.close_pr, github_repo, pr_number, branch)
+    except GitHubAuthError as e:
+        print(
+            f"[WARROOM][cleanup] PR #{pr_number} close 실패 — "
+            f"error_type=auth status_code={e.status_code} (토큰 회전 / 권한 점검 필요): {e}"
+        )
+        return {
+            "number": pr_number,
+            "branch": branch,
+            "error": str(e),
+            "error_type": "auth",
+            "status_code": e.status_code,
+        }
+    except GitHubTransientError as e:
+        print(
+            f"[WARROOM][cleanup] PR #{pr_number} close 실패 — "
+            f"error_type=transient status_code={e.status_code} (재시도 가치 있음): {e}"
+        )
+        return {
+            "number": pr_number,
+            "branch": branch,
+            "error": str(e),
+            "error_type": "transient",
+            "status_code": e.status_code,
+        }
+    except GitHubError as e:
+        print(
+            f"[WARROOM][cleanup] PR #{pr_number} close 실패 — "
+            f"error_type=http status_code={e.status_code}: {e}"
+        )
+        return {
+            "number": pr_number,
+            "branch": branch,
+            "error": str(e),
+            "error_type": "http",
+            "status_code": e.status_code,
+        }
     except Exception as e:
-        print(f"[WARROOM] PR cleanup 실패 (best-effort): {e}")
-        return {"number": pr_number, "branch": branch, "error": str(e)}
+        # 분류 안 된 예외 (네트워크 타임아웃 등 transport 레벨) — best-effort surface.
+        print(f"[WARROOM][cleanup] PR #{pr_number} close 실패 — error_type=unknown: {e}")
+        return {
+            "number": pr_number,
+            "branch": branch,
+            "error": str(e),
+            "error_type": "unknown",
+        }
     return {"number": pr_number, "branch": branch, "closed": True}
 
 
