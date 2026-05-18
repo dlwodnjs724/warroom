@@ -16,6 +16,7 @@ load_dotenv()
 
 from gateway.api.incidents import router as incidents_router
 from gateway.api.webhooks import router as webhooks_router
+from gateway.dependencies import get_github_client, get_github_repo, reset_github_client
 from gateway.infrastructure.db.session import current_url, init_schema, is_sqlite_backend
 from gateway.infrastructure.monitors.security import warn_if_secrets_missing
 from gateway.services.pipeline import set_main_loop
@@ -31,9 +32,17 @@ async def lifespan(app: FastAPI):
         print(f"[WARROOM] SQLite 자동 스키마 셋업 완료 ({current_url()})")
     else:
         print(f"[WARROOM] DATABASE_URL={current_url()} — `alembic upgrade head` 가 선행되어야 합니다.")
+
+    # GitHub client 를 lifespan 진입 시 1회 생성 → 캐싱. 이후 services 는
+    # dependencies.get_github_client() / get_github_repo() 만 의존.
+    reset_github_client()
+    get_github_client()
+    print(f"[WARROOM] GitHub client 초기화 (GITHUB_REPO={get_github_repo() or '미설정'})")
+
     yield
     print("[WARROOM] Gateway 종료")
     set_main_loop(None)
+    reset_github_client()
 
 
 app = FastAPI(title="Warroom Event Gateway", lifespan=lifespan)

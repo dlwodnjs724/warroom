@@ -18,9 +18,8 @@ from urllib.parse import quote
 
 import httpx
 import jwt
-from common.models import ResolutionReport
 
-from .base import GitHubClient, PullRequestResult
+from .base import GitHubClient
 
 _API = "https://api.github.com"
 
@@ -39,17 +38,6 @@ class GitHubAppClient(GitHubClient):
         self._http = http_client or httpx.Client(timeout=20.0)
         self._token: str | None = None
         self._token_exp: float = 0.0
-
-    def create_patch_pr(
-        self,
-        report: ResolutionReport,
-        repo: str,
-        base_branch: str = "main",
-    ) -> PullRequestResult:
-        """이전 호출자 호환용 thin wrapper. 신규 호출자는 ``pr_builder.build_patch_pr`` 직접 사용."""
-        from .pr_builder import build_patch_pr
-
-        return build_patch_pr(self, report, repo, base_branch)
 
     # ------- transport primitives -------------------------------------------
 

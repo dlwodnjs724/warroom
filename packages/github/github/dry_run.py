@@ -13,9 +13,7 @@ import json
 import os
 from pathlib import Path
 
-from common.models import ResolutionReport
-
-from .base import GitHubClient, PullRequestResult
+from .base import GitHubClient
 
 
 class DryRunGitHubClient(GitHubClient):
@@ -30,17 +28,6 @@ class DryRunGitHubClient(GitHubClient):
         self._incidents_dir = Path(
             incidents_dir or os.getenv("GITHUB_DRY_RUN_INCIDENTS", "./output/incidents")
         )
-
-    def create_patch_pr(
-        self,
-        report: ResolutionReport,
-        repo: str,
-        base_branch: str = "main",
-    ) -> PullRequestResult:
-        """이전 호출자 호환용 thin wrapper. 신규 호출자는 ``pr_builder.build_patch_pr`` 직접 사용."""
-        from .pr_builder import build_patch_pr
-
-        return build_patch_pr(self, report, repo, base_branch)
 
     def get_file_content(self, repo: str, path: str, ref: str) -> str:
         """dry-run 은 base 파일을 보유하지 않으므로 항상 FileNotFoundError.

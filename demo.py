@@ -148,9 +148,10 @@ def _open_github_pr(report) -> None:
         print("[WARROOM] GITHUB_REPO 미설정 — PR 생성 건너뜀")
         return
     from github.factory import make_github_client
+    from github.pr_builder import build_patch_pr
 
     client = make_github_client()
-    result = client.create_patch_pr(report, repo=repo)
+    result = build_patch_pr(client, report, repo=repo)
     tag = "(dry-run)" if result.dry_run else ""
     print(f"[WARROOM] PR 생성 {tag}: {result.pr_url}")
 
