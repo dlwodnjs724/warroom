@@ -194,6 +194,43 @@ class TestRejectPrCleanup:
         assert body["status"] == "rejected"
         assert "pr_closed" not in body  # PR 정보 없으면 cleanup 시도 안 함
 
+    async def test_reject_with_reason_persists_to_repository(self, client, monkeypatch):
+        """HTTP body 로 받은 rejection_reason 이 incident 컬럼에 저장된다."""
+        from gateway.infrastructure.db.repository import get_repository
+
+        monkeypatch.setenv("GITHUB_REPO", "owner/demo")
+        incident_id = await self._seed_awaiting("INC-REJECT-REASON-1")
+
+        resp = client.post(
+            f"/incidents/{incident_id}/reject",
+            json={"rejection_reason": "패치가 race condition 을 해결 못함"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "rejected"
+        assert body["rejection_reason"] == "패치가 race condition 을 해결 못함"
+
+        repo = get_repository()
+        entry = await repo.get(incident_id)
+        assert entry is not None
+        assert entry["rejection_reason"] == "패치가 race condition 을 해결 못함"
+
+    async def test_approve_does_not_persist_rejection_reason(self, client, monkeypatch):
+        """approve 경로는 rejection_reason 이 dict 에 들어와도 무시한다."""
+        from gateway.infrastructure.db.repository import get_repository
+        from gateway.services.decisions import handle_decision
+
+        monkeypatch.setenv("GITHUB_REPO", "owner/demo")
+        incident_id = await self._seed_awaiting("INC-APPROVE-NO-REASON-1")
+
+        # service 직접 호출 — HTTP /approve 는 reason 입력 불가하므로 의도적 우회.
+        await handle_decision(incident_id, approved=True, rejection_reason="ignored")
+
+        repo = get_repository()
+        entry = await repo.get(incident_id)
+        assert entry is not None
+        assert entry["rejection_reason"] is None
+
     async def test_approve_persists_pr_info(self, client, monkeypatch):
         from gateway.infrastructure.db.repository import get_repository
 
