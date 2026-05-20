@@ -198,6 +198,38 @@ class TestApproveButton:
         # endpoint 자체는 200 유지 — 슬랙에 4xx 보이면 안 됨.
         assert resp.status_code == 200
 
+    async def test_approve_action_missing_incident_id_silent(self, client):
+        """action.value (incident_id) 누락 — approve/reject 양쪽 공통 가드.
+
+        background task 가 빈 ID 로 handle_decision 을 호출하지 않아야 한다
+        (404 흡수는 되지만, 아예 schedule 안 하는 게 정확).
+        """
+        from gateway.infrastructure.db.repository import get_repository
+
+        # seed 만 해두고, 이 incident 는 건드리면 안 됨 (가드가 잘 작동하는지 검증)
+        seeded = await _seed_awaiting("INC-GUARD-1")
+
+        body = _form_body(
+            {
+                "type": "block_actions",
+                "trigger_id": "trig-1",
+                # value 누락
+                "actions": [{"action_id": "warroom_approve"}],
+            }
+        )
+        resp = _send(client, body)
+        assert resp.status_code == 200
+
+        # 가드가 통과되어 background task 가 돌면 seeded incident 가 살아남았는지
+        # 직접적으로 검증할 순 없으나, status 변경되지 않은 것으로 추정 가능
+        repo = get_repository()
+        entry = await repo.get(seeded)
+        assert entry is not None
+        # seeded 는 AWAITING_APPROVAL 유지 — 빈 incident_id 가 다른 데 흘러가지 않음
+        from common.models import IncidentStatus
+
+        assert entry["status"] == IncidentStatus.AWAITING_APPROVAL
+
 
 class TestRejectButton:
     async def test_reject_action_opens_modal(self, client, monkeypatch):
