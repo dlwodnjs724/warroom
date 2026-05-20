@@ -18,22 +18,29 @@ from gateway.api.incidents import router as incidents_router
 from gateway.api.slack import router as slack_router
 from gateway.api.webhooks import router as webhooks_router
 from gateway.dependencies import (
+    get_datadog_token,
     get_github_client,
     get_github_repo,
+    get_sentry_secret,
     get_slack_notifier,
+    get_slack_signing_secret,
     reset_github_client,
     reset_slack_notifier,
 )
 from gateway.infrastructure.db.session import current_url, init_schema, is_sqlite_backend
-from gateway.infrastructure.monitors.security import warn_if_secrets_missing
 from gateway.services.pipeline import set_main_loop
+from gateway.services.security import warn_if_secrets_missing
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     set_main_loop(asyncio.get_running_loop())
     print("[WARROOM] Gateway 시작")
-    warn_if_secrets_missing()
+    warn_if_secrets_missing(
+        sentry_secret=get_sentry_secret(),
+        datadog_token=get_datadog_token(),
+        slack_signing_secret=get_slack_signing_secret(),
+    )
     if is_sqlite_backend():
         await init_schema()
         print(f"[WARROOM] SQLite 자동 스키마 셋업 완료 ({current_url()})")

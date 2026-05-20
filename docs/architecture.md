@@ -54,7 +54,7 @@ sequenceDiagram
     participant GH as GitHubAppClient
 
     Mon->>API: POST /webhook/{sentry,datadog}
-    API->>API: verify signature (monitors.security)
+    API->>API: verify signature (services.security)
     API->>API: parse (monitors.{sentry,datadog})
     API->>Svc: ingest_event(event)
     Svc->>Repo: add(IncidentEvent) + dedupe check

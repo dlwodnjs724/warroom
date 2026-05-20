@@ -14,7 +14,7 @@ handle_decision 호출) 는 services layer 책임. webhooks.py ↔ ingest_event
 서명 검증:
     X-Slack-Signature + X-Slack-Request-Timestamp →
     HMAC-SHA256("v0:{ts}:{raw_body}", SLACK_SIGNING_SECRET) 일치 확인.
-    (실 검증 로직은 ``infrastructure/monitors/security.verify_slack_signature``)
+    (실 검증 로직은 ``services/security.verify_slack_signature``)
 """
 
 import json
@@ -22,8 +22,9 @@ from urllib.parse import parse_qs
 
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request, Response
 
-from gateway.infrastructure.monitors.security import verify_slack_signature
+from gateway.dependencies import get_slack_signing_secret
 from gateway.services import slack_interactions
+from gateway.services.security import verify_slack_signature
 
 router = APIRouter()
 
@@ -36,7 +37,9 @@ async def slack_interactions_endpoint(
     x_slack_request_timestamp: str | None = Header(default=None),
 ):
     body = await request.body()
-    if not verify_slack_signature(body, x_slack_signature, x_slack_request_timestamp):
+    if not verify_slack_signature(
+        body, x_slack_signature, x_slack_request_timestamp, get_slack_signing_secret()
+    ):
         raise HTTPException(status_code=401, detail="Invalid Slack signature")
 
     try:

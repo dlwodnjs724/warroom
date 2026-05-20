@@ -26,7 +26,7 @@ _FROZEN_EPOCH = 1_700_000_000
 def _freeze_clock(monkeypatch):
     """``common.clock.now`` 를 고정 — verify_slack_signature 의 replay 검사가 매번 같은 결과."""
     frozen = datetime.fromtimestamp(_FROZEN_EPOCH, tz=ZoneInfo("UTC"))
-    monkeypatch.setattr("gateway.infrastructure.monitors.security._now", lambda: frozen)
+    monkeypatch.setattr("gateway.services.security._now", lambda: frozen)
 
 
 @pytest.fixture
