@@ -20,7 +20,7 @@ import 하지 않게 composition root 로 끌어올린 wrapper.
 
 import os
 
-from chatops.base import Notifier
+from chatops.base import InteractiveNotifier, Notifier
 from chatops.clients.factory import make_notifier
 from chatops.clients.slack import SlackNotifier, ThreadLookup, ThreadPersist
 from github.base import GitHubClient
@@ -53,13 +53,17 @@ def reset_github_client() -> None:
     _github_client = None
 
 
-def get_slack_notifier() -> SlackNotifier:
-    """Slack Interactivity 경로 (views.open 등) 전용 SlackNotifier.
+def get_slack_notifier() -> InteractiveNotifier:
+    """Slack Interactivity 경로 (views.open 등) 전용 ``InteractiveNotifier``.
 
-    Pipeline 의 SlackNotifier (chat.postMessage / thread reply / chat.update)
+    Pipeline 의 ``Notifier`` (chat.postMessage / thread reply / chat.update)
     와 별도 인스턴스 — interactivity 는 thread 영속화 콜백이 필요 없고,
     pipeline 은 매 incident 마다 fresh 한 notifier 를 만드는 패턴이라 공유
     이점이 없다. Token 은 ``SLACK_BOT_TOKEN`` env 에서 읽음 (미설정 시 dry-run).
+
+    반환 contract 는 ``InteractiveNotifier`` (Protocol) — consumer 가 필요한
+    표면 (현재 ``open_reject_modal`` 만) 만 의존. 실 구현체는 ``SlackNotifier``
+    가 structural typing 으로 자동 매칭.
     """
     global _slack_notifier
     if _slack_notifier is None:
