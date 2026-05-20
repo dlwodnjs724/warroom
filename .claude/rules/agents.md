@@ -68,6 +68,32 @@ self-review 의 한계가 검증됨: PR #1 (Phase 4) / #6 / #8 에서 모두 col
 - MEDIUM 은 case-by-case — pre-existing 위험은 별도 follow-up 이슈로 분리
 - LOW 는 가치 있으면 같이, 아니면 스킵 (skip 이유는 PR comment 에 명시)
 
+## 3a. 사용자 audit — cold review 가 못 잡는 책임 분배 검토
+
+cold review 는 "이 코드가 룰을 어겼는가?" 는 잘 잡는다. 하지만 "이 책임 자체가 이 layer 에 있어야 하는가?" 같은 도메인 레벨 의사결정은 컨텍스트 부족으로 자주 놓친다. Phase 3 (PR #10) 에서 검증:
+
+- 1차 cold review: HIGH 3건 (datetime 룰 / lifespan timing / redact 누락) — 룰 위반 검출
+- 사용자 audit: `api/slack.py` 가 payload dispatch / action_id 분기 / notifier 직접 호출까지 모두 가지고 있는 점 지적 → `services/slack_interactions.py` 신설로 분리. cold reviewer 가 못 잡음 (api → infrastructure import 만 § 2 위반으로 잡고, "api 가 도메인 dispatch 까지 하는 게 책임 잘못 분배" 는 미감지)
+- 사용자 audit: inline `RejectBody` DTO → `api/incidents_schemas.py` 분리 + `.claude/rules/layering.md` § 7 신설
+- 2차 cold review: HIGH 없음 + M2 (incident_id 가드 비대칭) 잡음
+
+**패턴**: non-trivial PR 은 **cold review + 사용자 audit 2-stage** 가 안정적.
+
+**cold review 가 잘 잡는 것**: 룰북에 명시된 위반 (`os.getenv` in services, `time.time()` 대신 clock, redaction 누락, import 방향, naming).
+
+**cold review 가 잘 못 잡는 것**:
+- 책임 분배 (도메인 dispatch 가 api 인가 services 인가)
+- 룰북에 없는 컨벤션 (이번에 § 7 신설된 HTTP DTO 위치)
+- 새 패턴 — 룰북 갱신이 필요한 경우 (cold reviewer 는 기존 룰만 봄)
+
+**how to apply**:
+1. cold review 결과 HIGH/MEDIUM 반영 → push
+2. **사용자가 PR diff 직접 한 번 훑기** — "이게 자연스러운가?" 직관 검토. 룰 위반보다 더 큰 그림.
+3. 사용자 audit 발견 시 — 룰북에 박을 가치 있으면 (반복 가능 패턴) `.claude/rules/*.md` 갱신과 같이 commit
+4. 2차 cold review 는 audit fix 분량이 큰 경우만 (보통 HIGH 3+ 또는 신규 모듈 추가). 작은 fix 는 skip.
+
+**작업 분담 학습**: cold review 와 사용자 audit 은 **상호 보완**, 한쪽으로 대체 불가. cold review skip 하면 룰 위반 누락, 사용자 audit skip 하면 도메인 책임 분배 drift 누적.
+
 ## 4. Workflow 다이어그램
 
 ```
@@ -81,11 +107,17 @@ self-review 의 한계가 검증됨: PR #1 (Phase 4) / #6 / #8 에서 모두 col
     ↓
 [branch push + PR open]
     ↓
-[Cold-context review sub-agent]    ← non-trivial PR 기본
+[Cold-context review sub-agent]    ← non-trivial PR 기본 (룰 위반 검출)
     ↓
 [finding 분류: HIGH 반영 / MEDIUM 분리 / LOW 판단]
     ↓
 [push back commit + PR comment]
+    ↓
+[사용자 audit]                     ← 책임 분배 / 도메인 흐름 / 룰북 누락 (§ 3a)
+    ↓
+[audit fix + 룰북 갱신 (필요 시)]
+    ↓
+[2차 cold review (큰 fix 시만)]
     ↓
 [rebase merge → main]              ← FF 또는 squash 가 아닌 rebase
     ↓

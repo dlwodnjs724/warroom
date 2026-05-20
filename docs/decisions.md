@@ -1,6 +1,6 @@
 # 프로젝트 기획 및 기술 결정 사항
 
-> 2026-04-09 최초 작성, 2026-05-18 Phase 3 (Slack Interactivity) + Phase 4 (실 코드 변경 PR) 완료 반영
+> 2026-04-09 최초 작성, 2026-05-20 Phase 3 (Slack Interactivity) 머지 / 2026-05-18 Phase 4 (실 코드 변경 PR) 완료 반영
 
 ---
 

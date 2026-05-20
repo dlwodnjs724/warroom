@@ -100,15 +100,19 @@ packages/
 │   └── redact.py                 # 9개 secret 패턴 redaction (LLM 출력 → consumption 지점)
 │
 ├── gateway/                      # Event Gateway (3-layer)
-│   ├── main.py                   # composition root — FastAPI app + lifespan + include_router
-│   ├── api/                      # presentation
+│   ├── main.py                   # FastAPI app + lifespan + include_router
+│   ├── dependencies.py           # composition root — get_X / reset_X (github/slack singleton, env getter)
+│   ├── api/                      # presentation (HTTP boundary 만)
 │   │   ├── webhooks.py           #   /webhook/{sentry,datadog}
-│   │   └── incidents.py          #   /incidents (list/get/approve/reject)
+│   │   ├── incidents.py          #   /incidents (list/get/approve/reject)
+│   │   ├── incidents_schemas.py  #   RejectBody 등 HTTP DTO (layering.md § 7)
+│   │   └── slack.py              #   /slack/interactions (thin: 서명 + parse + dispatch)
 │   ├── services/                 # application — usecase
 │   │   ├── ingest.py             #   dedupe + 백그라운드 트리거
 │   │   ├── pipeline.py           #   파이프라인 실행 + slack 브리지 (sync↔async)
 │   │   ├── incidents.py          #   read query (list/get)
-│   │   └── decisions.py          #   approve/reject + PR 트리거
+│   │   ├── decisions.py          #   approve/reject + PR 트리거 + reason redact/cap
+│   │   └── slack_interactions.py #   payload dispatch (block_actions / view_submission)
 │   └── infrastructure/           # 외부 IO / 영속화
 │       ├── db/
 │       │   ├── models.py         #   SQLAlchemy Base, Incident, Report
@@ -117,7 +121,7 @@ packages/
 │       └── monitors/             # 모니터링 도구 어댑터
 │           ├── sentry.py         #   webhook payload → IncidentEvent
 │           ├── datadog.py
-│           └── security.py       #   webhook 서명 검증 (HMAC, token)
+│           └── security.py       #   webhook 서명 검증 (HMAC, token) — Sentry/Datadog/Slack
 │
 ├── orchestrator/                 # Multi-Agent Pipeline
 │   ├── agents.py                 # Triage / Analyst / Fixer (LLM provider 주입)
@@ -125,20 +129,22 @@ packages/
 │   ├── llm.py                    # Gemini / Anthropic / Ollama 추상화
 │   └── tools/                    # Sentry / GitHub lookup (현재 mock — Phase 6.2)
 │
-├── chatops/                      # Notifier
-│   ├── base.py
-│   ├── console.py
-│   ├── slack.py                  # Bot Token + chat.postMessage + thread + chat.update
-│   └── factory.py                # WARROOM_NOTIFIER=console|slack|both
+├── chatops/                      # Notifier (contract / clients / 분리 — layering.md § 4a)
+│   ├── base.py                   # Notifier ABC (on_incident_received / on_resolution_ready / ...)
+│   └── clients/
+│       ├── console.py            #   ConsoleNotifier
+│       ├── slack.py              #   SlackNotifier — Bot Token + chat.postMessage + thread + chat.update + open_reject_modal
+│       └── factory.py            #   make_notifier (WARROOM_NOTIFIER=console|slack|both)
 │
-└── github/                       # PR 자동 생성
-    ├── base.py                   # GitHubClient Protocol + PullRequestResult
-    ├── app.py                    # GitHub App (JWT → installation token → REST)
-    │                             #   create_patch_pr: unified diff hybrid + markdown 폴백
-    │                             #   close_pr: 반려 시 PR close + branch 삭제
-    ├── dry_run.py                # 페이로드/마크다운 파일 출력 (App 미설정 시)
+└── github/                       # PR 자동 생성 (contract / clients / usecase / infra — layering.md § 4a)
+    ├── base.py                   # GitHubClient Protocol + GitHubError 계층 (Auth/Transient)
+    ├── pr_builder.py             # usecase — build_patch_pr (unified diff hybrid + markdown 폴백)
+    ├── patch.py                  # git CLI helper — verify_apply / apply_diff
     ├── report.py                 # ResolutionReport → markdown / PR title/body (patch redact at render)
-    └── factory.py                # make_github_client()
+    └── clients/
+        ├── app.py                #   GitHubAppClient (JWT → installation token → REST + _check 분류)
+        ├── dry_run.py            #   DryRunGitHubClient (payload jsonl + markdown dump)
+        └── factory.py            #   make_github_client()
 ```
 
 ## 확장 포인트
