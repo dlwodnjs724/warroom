@@ -47,6 +47,21 @@ def get_github_repo() -> str | None:
     return os.getenv("GITHUB_REPO")
 
 
+def get_sentry_secret() -> str | None:
+    """``SENTRY_CLIENT_SECRET`` env 값. 캐싱 안 함 (``get_github_repo`` 와 동일 패턴)."""
+    return os.getenv("SENTRY_CLIENT_SECRET")
+
+
+def get_datadog_token() -> str | None:
+    """``WARROOM_DATADOG_TOKEN`` env 값. 캐싱 안 함."""
+    return os.getenv("WARROOM_DATADOG_TOKEN")
+
+
+def get_slack_signing_secret() -> str | None:
+    """``SLACK_SIGNING_SECRET`` env 값. 캐싱 안 함."""
+    return os.getenv("SLACK_SIGNING_SECRET")
+
+
 def reset_github_client() -> None:
     """테스트 격리용 — 다음 ``get_github_client`` 호출이 factory 재실행."""
     global _github_client

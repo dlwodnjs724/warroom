@@ -28,7 +28,7 @@ if not api_key:
     raise RuntimeError("ANTHROPIC_API_KEY 미설정")
 ```
 
-운영 전제 모듈은 B, dev 시연 편의 모듈은 A. 둘이 섞이면 안 됨 — `infrastructure/monitors/security.py` 는 A, `orchestrator/llm.py` 는 B.
+운영 전제 모듈은 B, dev 시연 편의 모듈은 A. 둘이 섞이면 안 됨 — `services/security.py` (webhook 서명 검증) 는 A, `orchestrator/llm.py` 는 B.
 
 ## 3. LLM 출력 redaction ★ Phase 4 핵심
 
