@@ -191,3 +191,38 @@ async def handle_decision(...):
 | 캐시된 singleton getter | `get_X()` (`get_repository`, `get_github_client`) |
 | 테스트 격리용 reset | `reset_X()` (`reset_repository`, `reset_github_client`) |
 | 외부 adapter error 계층 | `<Tool>Error` → `<Tool>AuthError` / `<Tool>TransientError` |
+| HTTP request/response DTO | `api/<domain>_schemas.py` (`api/incidents_schemas.py:RejectBody`) — 라우터 옆 짝지어 두기. `common/models.py` 의 도메인 모델과 구분 |
+
+## 7. HTTP DTO vs 도메인 모델
+
+라우터 본문에 `BaseModel` 인라인 정의 금지. DTO 가 1개라도 ``api/<domain>_schemas.py`` 분리.
+
+**Why:**
+- 라우터는 wiring 만 — DTO 가 늘면 (validator, example, response_model …) 라우터 책임이 비대해진다.
+- `common/models.py` 는 패키지 전체 도메인 모델 (모든 패키지 import) — HTTP 표면 전용 schema 를 섞으면 의미 흐려짐. DTO 는 gateway HTTP 경계에서만 산다.
+- cold-context agent 가 "새 DTO 어디 두지?" 매번 안 물어보게 컨벤션 명문화.
+
+```python
+# ❌ NO — 라우터에 inline
+# api/incidents.py
+class RejectBody(BaseModel):
+    rejection_reason: str | None = None
+
+@router.post("/incidents/{id}/reject")
+async def reject_incident(id: str, body: RejectBody | None = None): ...
+
+# ✅ YES — schema 파일 분리
+# api/incidents_schemas.py
+class RejectBody(BaseModel):
+    rejection_reason: str | None = None
+
+# api/incidents.py
+from gateway.api.incidents_schemas import RejectBody
+
+@router.post("/incidents/{id}/reject")
+async def reject_incident(id: str, body: RejectBody | None = None): ...
+```
+
+**Response model 도 동일** — `response_model=...` 로 쓸 Pydantic 객체는 같은 schemas 파일에. 도메인 객체 (`ResolutionReport` 등) 와는 별개.
+
+**예외 — Slack interactivity 같은 form-urlencoded / nested JSON payload**: Pydantic 모델로 받기보다 dict 로 받아 services 가 파싱 (예: `services/slack_interactions.py`). schema 파일 없음. 이유: Slack payload schema 가 외부 변동성 크고 partial fields 가 많아 strict typing 이 helpful 보다 painful.
