@@ -1,21 +1,22 @@
-"""Composition root 의존성.
+"""Composition root — gateway 의 모든 외부 어댑터 wiring + env credential 읽기 단일 지점 (§ 4c).
 
-``GitHubClient`` 인스턴스를 앱 lifecycle 동안 캐싱한다 (factory 호출 + PEM
-파일 read 가 비싸므로). ``GITHUB_REPO`` 는 단일 호출 지점 (이 모듈) 만 유지
-하고 캐싱하지 않는다 — services 가 env 직접 읽지 않게 boundary 통일이 목적.
+services / api 는 이 모듈의 getter / factory 만 호출하고 ``os.getenv`` /
+어댑터 factory 를 직접 부르지 않는다.
 
-env credentials 미설정 시 ``make_github_client`` 가 ``DryRunGitHubClient`` 를
-돌려주므로 별도 분기 불필요. 테스트는 ``reset_github_client`` + ``monkeypatch``
-로 격리.
+캐싱 정책 — 책임별 분리:
 
-Slack interactivity 전용 ``SlackNotifier`` 는 ``views.open`` 호출 시점에만
-필요하다 (pipeline 의 SlackNotifier 와 별개 — thread 영속화 콜백 불필요).
-``get_slack_notifier`` 가 lazy 캐싱.
+- **lazy singleton** (``get_github_client`` / ``get_slack_notifier``): 비싼
+  factory (PEM 파일 read, httpx client) 를 lifecycle 동안 1회만 호출. 테스트
+  격리는 ``reset_X``.
+- **매 호출 env read** (``get_github_repo`` / ``get_*_secret`` /
+  ``get_*_token``): ``os.getenv`` wrapper. 캐싱하면 테스트 격리만 복잡해진다
+  (env getter 호출 비용은 무시 가능).
+- **factory wrapper** (``make_pipeline_notifier``): 매 incident fresh 인스턴스
+  가 의도 — thread 영속화 콜백이 module-level 함수에 묶여 매번 wiring 필요.
+  캐싱 없음.
 
-Pipeline 용 ``Notifier`` 는 incident 마다 fresh 인스턴스가 필요 (thread 영속화
-콜백이 pipeline 의 module-level 함수에 묶임). 캐싱 없이 ``make_pipeline_notifier``
-가 매 호출마다 새로 만든다 — services 가 ``chatops.clients.factory`` 를 직접
-import 하지 않게 composition root 로 끌어올린 wrapper.
+env credential 미설정 시 dev 폴백은 각 factory 책임 (``make_github_client``
+가 ``DryRunGitHubClient``, ``SlackNotifier`` 가 token 없으면 dry-run print).
 """
 
 import os
