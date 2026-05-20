@@ -45,17 +45,20 @@ async def _handle_block_actions(payload: dict, background_tasks: BackgroundTasks
     action_id = action.get("action_id", "")
     incident_id = action.get("value") or ""
 
+    # incident_id 는 approve / reject 양쪽 모두 필요한 공통 요구사항.
+    # 누락된 페이로드는 silent skip — Slack 4xx retry 트리거 방지.
+    if not incident_id:
+        print(f"[WARROOM][slack] {action_id!r} — incident_id (action.value) 누락, skip")
+        return
+
     if action_id == "warroom_approve":
         background_tasks.add_task(_approve_in_background, incident_id)
         return
 
     if action_id == "warroom_reject":
         trigger_id = payload.get("trigger_id") or ""
-        if not trigger_id or not incident_id:
-            print(
-                f"[WARROOM][slack] reject 버튼 — trigger_id/incident_id 누락 "
-                f"(incident={incident_id!r}, trigger={'present' if trigger_id else 'missing'})"
-            )
+        if not trigger_id:
+            print(f"[WARROOM][slack] reject 버튼 — trigger_id 누락 (incident={incident_id!r})")
             return
         notifier = get_slack_notifier()
         await asyncio.to_thread(notifier.open_reject_modal, trigger_id, incident_id)
