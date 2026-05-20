@@ -41,11 +41,12 @@ def _lookup_slack_thread(incident_id: str) -> tuple[str, str] | None:
 
 async def run_incident_pipeline(event: IncidentEvent) -> None:
     # orchestrator는 import 지연 (LLM 초기화 비용)
-    from chatops.clients.factory import make_notifier
     from orchestrator.runner import run_pipeline
 
+    from gateway.dependencies import make_pipeline_notifier
+
     repo = get_repository()
-    notifier = make_notifier(persist_cb=_persist_slack_thread, lookup_cb=_lookup_slack_thread)
+    notifier = make_pipeline_notifier(persist_cb=_persist_slack_thread, lookup_cb=_lookup_slack_thread)
     try:
         await repo.update_status(event.incident_id, IncidentStatus.ANALYZING)
         # incident 알림 송신 — sync 한 httpx 호출이라 to_thread 로 이벤트 루프 비점유.

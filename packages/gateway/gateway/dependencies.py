@@ -11,11 +11,18 @@ env credentials 미설정 시 ``make_github_client`` 가 ``DryRunGitHubClient`` 
 Slack interactivity 전용 ``SlackNotifier`` 는 ``views.open`` 호출 시점에만
 필요하다 (pipeline 의 SlackNotifier 와 별개 — thread 영속화 콜백 불필요).
 ``get_slack_notifier`` 가 lazy 캐싱.
+
+Pipeline 용 ``Notifier`` 는 incident 마다 fresh 인스턴스가 필요 (thread 영속화
+콜백이 pipeline 의 module-level 함수에 묶임). 캐싱 없이 ``make_pipeline_notifier``
+가 매 호출마다 새로 만든다 — services 가 ``chatops.clients.factory`` 를 직접
+import 하지 않게 composition root 로 끌어올린 wrapper.
 """
 
 import os
 
-from chatops.clients.slack import SlackNotifier
+from chatops.base import Notifier
+from chatops.clients.factory import make_notifier
+from chatops.clients.slack import SlackNotifier, ThreadLookup, ThreadPersist
 from github.base import GitHubClient
 from github.clients.factory import make_github_client
 
@@ -64,3 +71,19 @@ def reset_slack_notifier() -> None:
     """테스트 격리용."""
     global _slack_notifier
     _slack_notifier = None
+
+
+def make_pipeline_notifier(
+    persist_cb: ThreadPersist | None = None,
+    lookup_cb: ThreadLookup | None = None,
+) -> Notifier:
+    """Pipeline 실행 시점에 호출되는 fresh ``Notifier`` factory.
+
+    pipeline.py 의 ``_persist_slack_thread`` / ``_lookup_slack_thread`` 는
+    sync 콜백이라 매 incident 마다 wiring 이 필요. 캐싱 없음 (의도) — 매
+    incident 마다 새 인스턴스가 thread 영속화 상태를 독립적으로 들고 간다.
+
+    services 가 ``chatops.clients.factory.make_notifier`` 를 직접 import 하지
+    않게 한 단계 wrapping — § layering.md § 4c.
+    """
+    return make_notifier(persist_cb=persist_cb, lookup_cb=lookup_cb)
