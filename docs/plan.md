@@ -10,12 +10,12 @@
 
 > **새 세션이 가장 먼저 볼 영역.** Phase 완료 / 우선순위 변경 시 즉시 갱신.
 
-- **진행 중**: **Phase 3 (Slack Interactivity) PR 오픈 + cold review 대기** — 6 commits on `feat/phase-3-slack-interactivity`. `/slack/interactions` endpoint (block_actions + view_submission), verify_slack_signature (v0 HMAC + 5분 replay 윈도우), SlackNotifier.open_reject_modal, incidents.rejection_reason 컬럼 + Alembic, handle_decision(rejection_reason). 198 tests pass (170 → 198, +28)
+- **마지막 완료**: **Phase 3 (Slack Interactivity)** 머지 (PR #10, 2026-05-20, 10 commits rebase merge). `/slack/interactions` endpoint (block_actions + view_submission), verify_slack_signature (v0 HMAC + 5분 replay 윈도우), SlackNotifier.open_reject_modal, incidents.rejection_reason 컬럼 + Alembic. 2회 cold review (HIGH 3 + M2 fix). audit 2회로 `api/slack.py` thin layer 분리 + DTO 분리 + layering.md § 7 codify. **204 tests pass** (170 → 204, +34)
 - **이전 완료**: Convention codify + clients/ 그룹핑 (PR #9). PR reliability (PR #8). Architecture follow-up (PR #6). Phase 4 (PR #1)
-- **모든 follow-up 이슈 closed**: #2 #3 #4 #5 #7 (5건). Phase 4 후속 architectural debt 정리 완료
-- **다음 1순위 (Phase 3 머지 후)**: **Phase 4.0 / 6.2** — Mock → Real Sentry/GitHub tool. demo 흐름은 mock 으로 작동하나 LLM 분석 품질 ↑ 필요
+- **Phase 3 후속 follow-up 이슈** (생성됨): [#11](https://github.com/dlwodnjs724/warroom/issues/11) signature helpers composition root 이전, [#12](https://github.com/dlwodnjs724/warroom/issues/12) InteractiveNotifier Protocol 분리, [#13](https://github.com/dlwodnjs724/warroom/issues/13) pipeline.py make_notifier composition root 이전
+- **다음 1순위**: **Phase 4.0 / 6.2** — Mock → Real Sentry/GitHub tool. demo 흐름은 mock 으로 작동하나 LLM 분석 품질 ↑ 필요
 - **다음 2순위**: **Phase 6.1** — `print` → `logging` 마이그레이션. `[WARROOM][cleanup]` / `[WARROOM][open_pr]` / `[WARROOM][slack]` / `[pr_builder][ORPHAN]` 같은 prefix 패턴이 누적되어 logger 도입 ROI 큰 시점
-- **Phase 3 follow-up 후보**: 재분석 요청 hook (저장된 rejection_reason 을 컨텍스트로 orchestrator 재실행) — Phase 3.5 의 "재분석 시 컨텍스트 주입" 부분, 현재 시스템에 재분석 자체가 없어 별도 이슈로 분리 예정
+- **Phase 3 후속 follow-up 후보**: 재분석 요청 hook (저장된 rejection_reason 을 컨텍스트로 orchestrator 재실행) — 시스템에 재분석 자체가 없어 별도 이슈로 분리 예정
 - **사용자 명시 deferred**: weekly report (사용자가 "리포트는 잠시 대기" 라고 함 — 신호 받을 때까지 대기)
 
 ---
@@ -234,14 +234,19 @@ Phase 2 진입 전 long-term maintainability 정리.
   - 드라이버 표기 inconsistency (`aiomysql` → `asyncmy`, `c2feda2`)
   - 테스트 env 누수 차단 강화 (Slack/GitHub vars, `0b6fb39`)
 
-### Phase 3 — Slack Interactivity (PR 오픈, 2026-05-18)
+### Phase 3 — Slack Interactivity (완료, PR #10 머지 2026-05-20)
 
 - **3.1** ⬜ Slack App Interactivity URL 등록 (ngrok HTTPS) — 운영 단계, 코드 변경 없음
-- **3.2** ✅ `/slack/interactions` endpoint + 서명 검증 — `gateway/api/slack.py` + `verify_slack_signature` (v0 HMAC-SHA256 + 5분 replay 윈도우)
+- **3.2** ✅ `/slack/interactions` endpoint + 서명 검증 — `gateway/api/slack.py` (thin layer: 서명 검증 + body parse + services 위임) + `gateway/services/slack_interactions.py` (dispatch / action_id 분기 / notifier 호출) + `verify_slack_signature` (v0 HMAC-SHA256 + 5분 replay 윈도우)
 - **3.3** ✅ 버튼 클릭 → `handle_decision` 재사용 — block_actions 의 `warroom_approve` → BackgroundTasks (3초 룰), `warroom_reject` → modal open
 - **3.4** ✅ ❌ 클릭 → modal → 거절 사유 캡쳐 — `SlackNotifier.open_reject_modal` (callback_id `warroom_reject_modal`, private_metadata 에 incident_id), view_submission 처리
-- **3.5** ✅ 사유 영속화 — `incidents.rejection_reason` 컬럼 + Alembic `6d3aecc468a3` + `handle_decision(rejection_reason=...)`. **재분석 hook 은 별도 follow-up 으로 분리** (현재 시스템에 재분석 자체가 없음)
-- **3.6** ✅ 테스트 — verify_slack_signature 단위 7, SlackNotifier modal 3, /slack/interactions 통합 15 = +28 tests (170→198)
+- **3.5** ✅ 사유 영속화 — `incidents.rejection_reason` 컬럼 + Alembic `6d3aecc468a3` + `handle_decision(rejection_reason=...)` + `common.redact.redact_secrets` 통과 + 4000자 캡. **재분석 hook 은 별도 follow-up 으로 분리** (현재 시스템에 재분석 자체가 없음)
+- **3.6** ✅ 테스트 — +34 tests (170→204): verify_slack_signature 단위 9 (replay boundary 포함), SlackNotifier modal 3, /slack/interactions 통합 16 (utf-8 / empty incident_id 가드 포함), handle_decision redact + cap + reason 영속화 + approve 무시 4, fallback assertion 1, signature replay 보강 1
+
+**후속 follow-up 이슈** (생성됨):
+- [#11](https://github.com/dlwodnjs724/warroom/issues/11) — webhook signature helpers 를 services + composition root 로 이전 (Sentry/Datadog/Slack 3건)
+- [#12](https://github.com/dlwodnjs724/warroom/issues/12) — `InteractiveNotifier` Protocol 분리
+- [#13](https://github.com/dlwodnjs724/warroom/issues/13) — `services/pipeline.py:make_notifier` composition root 로 이전 (pre-existing)
 
 ### Phase 4 — 실 코드 변경 PR (완료, PR #1 머지 2026-05-18)
 
