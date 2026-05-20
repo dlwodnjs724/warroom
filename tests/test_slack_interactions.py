@@ -145,6 +145,15 @@ class TestBadRequests:
         )
         assert resp.status_code == 400
 
+    def test_invalid_utf8_body_returns_400_not_500(self, client):
+        # 잘못된 utf-8 바이트 — 5xx 면 Slack 이 retry 한다 (cold review H4).
+        resp = client.post(
+            "/slack/interactions",
+            content=b"\xff\xfe\xfd",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        assert resp.status_code == 400
+
     def test_unknown_payload_type_ignored(self, client):
         body = _form_body({"type": "shortcut"})
         resp = _send(client, body)
