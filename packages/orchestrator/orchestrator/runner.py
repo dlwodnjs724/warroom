@@ -162,6 +162,7 @@ def _run_crew_pipeline(event: IncidentEvent, notifier: Notifier) -> ResolutionRe
         expected_output="심각도, 카테고리, 상황 요약, Sentry 이슈 ID를 포함한 초기 브리핑",
         agent=triage_agent,
     )
+    notifier.on_agent_update(event.incident_id, "Triage Agent", "심각도 + category 분류 중...")
     Crew(
         agents=[triage_agent],
         tasks=[triage_task],
@@ -172,6 +173,11 @@ def _run_crew_pipeline(event: IncidentEvent, notifier: Notifier) -> ResolutionRe
     triage_output = triage_task.output.raw if triage_task.output else ""
     severity = _extract_severity(triage_output)
     category = _extract_category(triage_output)
+    notifier.on_agent_update(
+        event.incident_id,
+        "Triage Agent",
+        f"분류 완료 — severity={severity.value} / category={category.value}",
+    )
 
     if category != IncidentCategory.CODE:
         notifier.on_agent_update(
@@ -225,6 +231,11 @@ def _run_crew_pipeline(event: IncidentEvent, notifier: Notifier) -> ResolutionRe
         agent=fixer_agent,
         context=[analyst_task],
     )
+    notifier.on_agent_update(
+        event.incident_id,
+        "Analyst Agent",
+        "Sentry / GitHub tool 호출 + 근본 원인 (5 Whys / Fishbone) 분석 중...",
+    )
     Crew(
         agents=[analyst_agent, fixer_agent],
         tasks=[analyst_task, fixer_task],
@@ -234,6 +245,10 @@ def _run_crew_pipeline(event: IncidentEvent, notifier: Notifier) -> ResolutionRe
 
     analyst_output = analyst_task.output.raw if analyst_task.output else ""
     fixer_output = fixer_task.output.raw if fixer_task.output else ""
+    notifier.on_agent_update(event.incident_id, "Analyst Agent", "근본 원인 분석 완료.")
+    notifier.on_agent_update(
+        event.incident_id, "Fixer Agent", "unified diff 패치 + 포스트모템 초안 작성 완료."
+    )
     patch, postmortem = _split_fixer_output(fixer_output)
 
     # patch 는 diff 구조 보존 위해 redact 미적용 — 소비 지점에서 처리 (위 mock 분기와 동일 이유)
