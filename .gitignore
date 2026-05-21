@@ -19,6 +19,9 @@ wheels/
 output/
 data/
 
+# SQLite demo / dev DB (DATABASE_URL=sqlite+aiosqlite:///./demo.db 등)
+*.db
+
 # 수업 자료 및 제출물
 lecture_notes/
 submission/
