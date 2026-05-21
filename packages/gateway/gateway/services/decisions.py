@@ -10,8 +10,9 @@ from fastapi.responses import JSONResponse
 from github.base import GitHubAuthError, GitHubClient, GitHubError, GitHubTransientError
 from github.pr_builder import build_patch_pr
 
-from gateway.dependencies import get_github_client, get_github_repo
+from gateway.dependencies import get_github_client, get_github_repo, make_pipeline_notifier
 from gateway.infrastructure.db.repository import get_repository
+from gateway.services.pipeline import _lookup_slack_thread
 
 # rejection_reason 은 Slack modal 자유 입력 → DB 영속화 + HTTP 응답 echo + 추후 LLM
 # 컨텍스트 주입 (재분석 hook 도입 시) 까지 흐르므로, secrets.md § 3 의 redaction
@@ -23,6 +24,7 @@ async def handle_decision(
     incident_id: str,
     approved: bool,
     rejection_reason: str | None = None,
+    actor_user_id: str | None = None,
 ) -> JSONResponse:
     repo = get_repository()
     entry = await repo.get(incident_id)
@@ -54,6 +56,36 @@ async def handle_decision(
     else:
         print(f"[WARROOM] 인시던트 {incident_id} {action} 처리 완료")
 
+    # Slack thread 에 결정 사실 + (반려 시) 사유 echo. PR 결과는 PR 생성/close 직후
+    # 추가 reply 로 송신. notifier 가 dry-run (token 없음) 이면 stdout JSONL 만 찍힘.
+    # pipeline 과 동일하게 thread_lookup 콜백을 wiring — 이 인스턴스는 webhook 을
+    # 받지 않았으므로 in-memory 캐시는 비어있고, DB lookup 으로만 thread_ts 확보 가능.
+    notifier = make_pipeline_notifier(lookup_cb=_lookup_slack_thread)
+    # actor mention — Slack interactivity payload 의 user.id (`<@USERID>` 형식 멘션).
+    # 없으면 빈 prefix (CLI 직접 호출 / 테스트 경로 등).
+    actor = f"<@{actor_user_id}> " if actor_user_id else ""
+    if approved:
+        await asyncio.to_thread(
+            notifier.on_agent_update,
+            incident_id,
+            "WARROOM",
+            f"✅ {actor}승인 — GitHub PR 생성 진행 중...",
+        )
+    elif reason_to_persist:
+        await asyncio.to_thread(
+            notifier.on_agent_update,
+            incident_id,
+            "WARROOM",
+            f"❌ {actor}반려 — 사유: {reason_to_persist}",
+        )
+    else:
+        await asyncio.to_thread(
+            notifier.on_agent_update,
+            incident_id,
+            "WARROOM",
+            f"❌ {actor}반려 (사유 미입력)",
+        )
+
     response: dict[str, object] = {
         "incident_id": incident_id,
         "status": status,
@@ -76,6 +108,12 @@ async def handle_decision(
                 f"[WARROOM][open_pr] {incident_id} PR 생성 실패 — "
                 f"error_type=auth status_code={e.status_code} (토큰 회전 / 권한 점검 필요): {e}"
             )
+            await asyncio.to_thread(
+                notifier.on_agent_update,
+                incident_id,
+                "WARROOM",
+                f"⚠️ PR 생성 실패 (auth, {e.status_code}) — 토큰/권한 점검 필요",
+            )
             response["pull_request"] = {
                 "error": str(e),
                 "error_type": "auth",
@@ -87,6 +125,12 @@ async def handle_decision(
                 f"[WARROOM][open_pr] {incident_id} PR 생성 실패 — "
                 f"error_type=transient status_code={e.status_code} (재시도 가치 있음): {e}"
             )
+            await asyncio.to_thread(
+                notifier.on_agent_update,
+                incident_id,
+                "WARROOM",
+                f"⚠️ PR 생성 실패 (transient, {e.status_code}) — 재시도 가치 있음",
+            )
             response["pull_request"] = {
                 "error": str(e),
                 "error_type": "transient",
@@ -97,6 +141,12 @@ async def handle_decision(
             print(
                 f"[WARROOM][open_pr] {incident_id} PR 생성 실패 — "
                 f"error_type=http status_code={e.status_code}: {e}"
+            )
+            await asyncio.to_thread(
+                notifier.on_agent_update,
+                incident_id,
+                "WARROOM",
+                f"⚠️ PR 생성 실패 (http {e.status_code})",
             )
             response["pull_request"] = {
                 "error": str(e),
@@ -121,10 +171,40 @@ async def handle_decision(
                 )
         if pr_result:
             response["pull_request"] = pr_result
+            # 성공 / skip / dry-run 분기별 thread reply
+            if pr_result.get("skipped"):
+                await asyncio.to_thread(
+                    notifier.on_agent_update,
+                    incident_id,
+                    "WARROOM",
+                    f"⏭ PR 생성 skip — {pr_result.get('reason')}",
+                )
+            elif isinstance(pr_result.get("number"), int):
+                dry = " (dry-run)" if pr_result.get("dry_run") else ""
+                await asyncio.to_thread(
+                    notifier.on_agent_update,
+                    incident_id,
+                    "WARROOM",
+                    f"🎉 GitHub PR #{pr_result['number']} 생성{dry}\n{pr_result.get('url')}",
+                )
     else:
         closed = await _close_pr_if_exists(incident_id, github_client, github_repo)
         if closed:
             response["pr_closed"] = closed
+            if closed.get("closed"):
+                await asyncio.to_thread(
+                    notifier.on_agent_update,
+                    incident_id,
+                    "WARROOM",
+                    f"🧹 PR #{closed['number']} close + branch `{closed['branch']}` 삭제 완료",
+                )
+            elif "error" in closed:
+                await asyncio.to_thread(
+                    notifier.on_agent_update,
+                    incident_id,
+                    "WARROOM",
+                    f"⚠️ PR #{closed['number']} cleanup 실패 — error_type={closed.get('error_type')}",
+                )
 
     return JSONResponse(response)
 

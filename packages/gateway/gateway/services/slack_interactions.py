@@ -44,6 +44,8 @@ async def _handle_block_actions(payload: dict, background_tasks: BackgroundTasks
     action = actions[0]
     action_id = action.get("action_id", "")
     incident_id = action.get("value") or ""
+    # Slack mention 용 — payload.user.id 는 block_actions 에 항상 포함.
+    actor_user_id = (payload.get("user") or {}).get("id") or None
 
     # incident_id 는 approve / reject 양쪽 모두 필요한 공통 요구사항.
     # 누락된 페이로드는 silent skip — Slack 4xx retry 트리거 방지.
@@ -52,7 +54,7 @@ async def _handle_block_actions(payload: dict, background_tasks: BackgroundTasks
         return
 
     if action_id == "warroom_approve":
-        background_tasks.add_task(_approve_in_background, incident_id)
+        background_tasks.add_task(_approve_in_background, incident_id, actor_user_id)
         return
 
     if action_id == "warroom_reject":
@@ -80,26 +82,29 @@ def _handle_view_submission(payload: dict, background_tasks: BackgroundTasks) ->
     incident_id = view.get("private_metadata") or ""
     state_values = view.get("state", {}).get("values", {})
     reason = (state_values.get("reason_block", {}).get("reason", {}).get("value") or "").strip()
-    background_tasks.add_task(_reject_in_background, incident_id, reason or None)
+    actor_user_id = (payload.get("user") or {}).get("id") or None
+    background_tasks.add_task(_reject_in_background, incident_id, reason or None, actor_user_id)
 
 
-async def _approve_in_background(incident_id: str) -> None:
+async def _approve_in_background(incident_id: str, actor_user_id: str | None) -> None:
     """BackgroundTasks 에서 호출 — handle_decision 의 HTTPException 흡수 후 로그.
 
     Slack 에 4xx 가 그대로 보이면 Slack 이 retry 하므로, 도메인 실패는
     응답이 아닌 로그로만 surface.
     """
     try:
-        await handle_decision(incident_id, approved=True)
+        await handle_decision(incident_id, approved=True, actor_user_id=actor_user_id)
     except HTTPException as e:
         print(f"[WARROOM][slack] approve {incident_id} 실패 — " f"status={e.status_code} detail={e.detail}")
     except Exception as e:
         print(f"[WARROOM][slack] approve {incident_id} 예외: {e}")
 
 
-async def _reject_in_background(incident_id: str, reason: str | None) -> None:
+async def _reject_in_background(incident_id: str, reason: str | None, actor_user_id: str | None) -> None:
     try:
-        await handle_decision(incident_id, approved=False, rejection_reason=reason)
+        await handle_decision(
+            incident_id, approved=False, rejection_reason=reason, actor_user_id=actor_user_id
+        )
     except HTTPException as e:
         print(f"[WARROOM][slack] reject {incident_id} 실패 — " f"status={e.status_code} detail={e.detail}")
     except Exception as e:
