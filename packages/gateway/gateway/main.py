@@ -27,6 +27,7 @@ from gateway.dependencies import (
     reset_github_client,
     reset_slack_notifier,
 )
+from gateway.infrastructure.db.repository import get_repository
 from gateway.infrastructure.db.session import current_url, init_schema, is_sqlite_backend
 from gateway.services.pipeline import set_main_loop
 from gateway.services.security import warn_if_secrets_missing
@@ -46,6 +47,11 @@ async def lifespan(app: FastAPI):
         print(f"[WARROOM] SQLite 자동 스키마 셋업 완료 ({current_url()})")
     else:
         print(f"[WARROOM] DATABASE_URL={current_url()} — `alembic upgrade head` 가 선행되어야 합니다.")
+
+    # 비정상 종료로 ANALYZING 에서 stuck 된 incident 정리 → FAILED.
+    recovered = await get_repository().recover_stale_analyzing()
+    if recovered:
+        print(f"[WARROOM] stale ANALYZING 인시던트 {recovered}건 → FAILED 마킹")
 
     # GitHub client 를 lifespan 진입 시 1회 생성 → 캐싱. 이후 services 는
     # dependencies.get_github_client() / get_github_repo() 만 의존.

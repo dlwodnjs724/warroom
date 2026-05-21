@@ -7,7 +7,7 @@ docs/plan.md 의 환경 매트릭스 참조.
 from datetime import datetime
 
 from common.models import IncidentEvent, IncidentStatus, ResolutionReport
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from gateway.infrastructure.db.models import Incident, Report
 from gateway.infrastructure.db.session import get_session_factory
@@ -150,6 +150,22 @@ class IncidentRepository:
                 return None
             report = await s.get(Report, incident_id)
             return _incident_to_dict(incident, report)
+
+    async def recover_stale_analyzing(self) -> int:
+        """Startup 시 stuck 된 ANALYZING incident 를 FAILED 로 마킹. 갯수 반환.
+
+        파이프라인 실행 중 서버가 비정상 종료되면 status 가 ANALYZING 에서
+        영원히 stuck 된다. lifespan 진입 시 1회 호출하여 정리한다.
+        """
+        sf = get_session_factory()
+        async with sf() as s:
+            result = await s.execute(
+                update(Incident)
+                .where(Incident.status == IncidentStatus.ANALYZING.value)
+                .values(status=IncidentStatus.FAILED.value)
+            )
+            await s.commit()
+            return result.rowcount or 0
 
     async def list_all(self) -> list[dict]:
         sf = get_session_factory()

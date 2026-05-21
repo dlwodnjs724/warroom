@@ -155,6 +155,77 @@ class TestDedupe:
         assert entry2["dupe_count"] == 1
 
 
+class TestRecoverStaleAnalyzing:
+    async def test_no_stale_returns_zero(self, schema, repo):
+        assert await repo.recover_stale_analyzing() == 0
+
+    async def test_recovers_single_stuck_analyzing(self, schema, repo, event):
+        await repo.add(event)
+        await repo.update_status("sentry-1", IncidentStatus.ANALYZING)
+
+        recovered = await repo.recover_stale_analyzing()
+        assert recovered == 1
+
+        entry = await repo.get("sentry-1")
+        assert entry["status"] == IncidentStatus.FAILED
+
+    async def test_recovers_multiple_stuck_analyzing(self, schema, repo):
+        for i in range(3):
+            event = IncidentEvent(
+                incident_id=f"sentry-{i}",
+                source="sentry",
+                title=f"err {i}",
+                raw_payload={},
+            )
+            await repo.add(event)
+            await repo.update_status(f"sentry-{i}", IncidentStatus.ANALYZING)
+
+        recovered = await repo.recover_stale_analyzing()
+        assert recovered == 3
+        for i in range(3):
+            entry = await repo.get(f"sentry-{i}")
+            assert entry["status"] == IncidentStatus.FAILED
+
+    async def test_does_not_touch_other_statuses(self, schema, repo, event):
+        await repo.add(event)
+        # PENDING 으로 둠 (default)
+        await repo.recover_stale_analyzing()
+        entry = await repo.get("sentry-1")
+        assert entry["status"] == IncidentStatus.PENDING
+
+    async def test_does_not_touch_completed_statuses(self, schema, repo, event, report):
+        await repo.add(event)
+        await repo.save_report("sentry-1", report)
+        await repo.update_status("sentry-1", IncidentStatus.APPROVED, is_approved=True)
+
+        recovered = await repo.recover_stale_analyzing()
+        assert recovered == 0
+        entry = await repo.get("sentry-1")
+        assert entry["status"] == IncidentStatus.APPROVED
+
+    async def test_only_recovers_analyzing_in_mixed_set(self, schema, repo):
+        # 3건: ANALYZING, PENDING, APPROVED
+        for i, status in enumerate(
+            [IncidentStatus.ANALYZING, IncidentStatus.PENDING, IncidentStatus.APPROVED]
+        ):
+            event = IncidentEvent(
+                incident_id=f"mix-{i}",
+                source="sentry",
+                title=f"mixed {i}",
+                raw_payload={},
+            )
+            await repo.add(event)
+            if status != IncidentStatus.PENDING:
+                await repo.update_status(f"mix-{i}", status)
+
+        recovered = await repo.recover_stale_analyzing()
+        assert recovered == 1  # ANALYZING 1건만
+
+        assert (await repo.get("mix-0"))["status"] == IncidentStatus.FAILED
+        assert (await repo.get("mix-1"))["status"] == IncidentStatus.PENDING
+        assert (await repo.get("mix-2"))["status"] == IncidentStatus.APPROVED
+
+
 class TestAddClearsStaleReport:
     async def test_add_clears_stale_report(self, schema, repo, event, report):
         await repo.add(event)
