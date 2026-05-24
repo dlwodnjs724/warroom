@@ -95,7 +95,7 @@ async def _approve_in_background(incident_id: str, actor_user_id: str | None) ->
     try:
         await handle_decision(incident_id, approved=True, actor_user_id=actor_user_id)
     except HTTPException as e:
-        print(f"[WARROOM][slack] approve {incident_id} 실패 — " f"status={e.status_code} detail={e.detail}")
+        print(f"[WARROOM][slack] approve {incident_id} 실패 — status={e.status_code} detail={e.detail}")
     except Exception as e:
         print(f"[WARROOM][slack] approve {incident_id} 예외: {e}")
 
@@ -106,6 +106,6 @@ async def _reject_in_background(incident_id: str, reason: str | None, actor_user
             incident_id, approved=False, rejection_reason=reason, actor_user_id=actor_user_id
         )
     except HTTPException as e:
-        print(f"[WARROOM][slack] reject {incident_id} 실패 — " f"status={e.status_code} detail={e.detail}")
+        print(f"[WARROOM][slack] reject {incident_id} 실패 — status={e.status_code} detail={e.detail}")
     except Exception as e:
         print(f"[WARROOM][slack] reject {incident_id} 예외: {e}")

@@ -87,9 +87,7 @@ class TestRedactSecrets:
 
     def test_within_code_block(self):
         # 가장 흔한 케이스 — LLM 이 예시 코드에 진짜 token 박는 경우
-        text = (
-            "```python\n" "client = OpenAI(api_key='sk-realonetencharsABCDEFGHIJKL0123456789012345')\n" "```"
-        )
+        text = "```python\nclient = OpenAI(api_key='sk-realonetencharsABCDEFGHIJKL0123456789012345')\n```"
         result = redact_secrets(text)
         assert "sk-realonetencharsABCDEFGHIJKL0123456789012345" not in result
         assert "[REDACTED:openai_api_key]" in result
