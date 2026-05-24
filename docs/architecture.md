@@ -89,6 +89,34 @@ sequenceDiagram
     Note over Dev,GH: 반려 시: Slack ❌ → views.open modal (reason 입력)<br/>→ view_submission → handle_decision(approved=False, reason)<br/>→ get_pr_info → GH.close_pr (PATCH /pulls + DELETE /git/refs)
 ```
 
+## Incident 상태 머신
+
+`common.models.IncidentStatus` 의 전이도. 모든 update 는 `IncidentRepository.update_status` 한 곳을 거친다 (DB write 단일 진입점).
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING : webhook 수신 + repo.add
+    PENDING --> ANALYZING : services.pipeline 진입 (BackgroundTask)
+    ANALYZING --> AWAITING_APPROVAL : Triage→Analyst→Fixer 완료 + save_report
+    ANALYZING --> FAILED : pipeline 예외
+    AWAITING_APPROVAL --> APPROVED : Slack ✅ / POST /approve
+    AWAITING_APPROVAL --> REJECTED : Slack ❌ + modal reason / POST /reject
+    APPROVED --> [*] : GitHub PR open (또는 dry-run)
+    REJECTED --> [*] : PR close + branch 삭제 (있으면)
+    FAILED --> [*]
+    ANALYZING --> FAILED : startup 시 stuck 복구 (recover_stale_analyzing)
+    note right of FAILED
+        비정상 종료로 ANALYZING 에서 멈춘 incident 는
+        lifespan 진입 시 일괄 FAILED 마킹 (Phase 5.5).
+    end note
+```
+
+**불변 조건**:
+- `PENDING` 에서만 webhook 재수신 → dedupe 카운터 +1 (status 전이 없음)
+- `AWAITING_APPROVAL` 만 approve/reject 가능 — 다른 status 의 결정 호출은 `decisions.handle_decision` 이 404
+- `REJECTED` 의 `incidents.rejection_reason` 은 redaction + 4000자 cap 통과 (`secrets.md § 3`)
+- `APPROVED` 의 `pr_number/pr_branch` 가 있으면 추후 반려가 불가능 (terminal). 재분석 hook 은 별도 follow-up
+
 ## 패키지 구조
 
 ```
