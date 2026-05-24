@@ -21,6 +21,7 @@ env credential 미설정 시 dev 폴백은 각 factory 책임 (``make_github_cli
 
 import os
 
+import sentry_sdk
 from chatops.base import InteractiveNotifier, Notifier
 from chatops.clients.factory import make_notifier
 from chatops.clients.slack import SlackNotifier, ThreadLookup, ThreadPersist
@@ -29,6 +30,41 @@ from github.clients.factory import make_github_client
 
 _github_client: GitHubClient | None = None
 _slack_notifier: SlackNotifier | None = None
+_sentry_initialized: bool = False
+
+
+def init_sentry() -> bool:
+    """Warroom 자체의 self-monitoring — 본인 에러를 Sentry 로 capture.
+
+    Dogfooding: AIOps 도구가 자기 자신에게도 적용된다. ``SENTRY_DSN`` 미설정
+    시 no-op (테스트 / dev 안전). idempotent — 두 번째 호출은 skip.
+
+    환경:
+        SENTRY_DSN                  : 없으면 disabled
+        SENTRY_ENVIRONMENT          : 기본 "development"
+        SENTRY_TRACES_SAMPLE_RATE   : 기본 0.0 (성능 trace 비활성)
+    """
+    global _sentry_initialized
+    if _sentry_initialized:
+        return True
+    dsn = os.getenv("SENTRY_DSN")
+    if not dsn:
+        return False
+    sentry_sdk.init(
+        dsn=dsn,
+        environment=os.getenv("SENTRY_ENVIRONMENT", "development"),
+        traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.0")),
+        # 단순 error capture 만 — session pings 는 시연 노이즈.
+        auto_session_tracking=False,
+    )
+    _sentry_initialized = True
+    return True
+
+
+def reset_sentry() -> None:
+    """테스트 격리용 — 다음 ``init_sentry`` 호출이 다시 활성화 가능하도록."""
+    global _sentry_initialized
+    _sentry_initialized = False
 
 
 def get_github_client() -> GitHubClient:

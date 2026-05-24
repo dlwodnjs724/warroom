@@ -16,6 +16,7 @@ load_dotenv()
 
 from gateway.api.incidents import router as incidents_router
 from gateway.api.slack import router as slack_router
+from gateway.api.system import router as system_router
 from gateway.api.webhooks import router as webhooks_router
 from gateway.dependencies import (
     get_datadog_token,
@@ -24,6 +25,7 @@ from gateway.dependencies import (
     get_sentry_secret,
     get_slack_notifier,
     get_slack_signing_secret,
+    init_sentry,
     reset_github_client,
     reset_slack_notifier,
 )
@@ -37,6 +39,8 @@ from gateway.services.security import warn_if_secrets_missing
 async def lifespan(app: FastAPI):
     set_main_loop(asyncio.get_running_loop())
     print("[WARROOM] Gateway 시작")
+    if init_sentry():
+        print("[WARROOM] Sentry self-monitoring 활성화 (SENTRY_DSN 감지)")
     warn_if_secrets_missing(
         sentry_secret=get_sentry_secret(),
         datadog_token=get_datadog_token(),
@@ -75,3 +79,4 @@ app = FastAPI(title="Warroom Event Gateway", lifespan=lifespan)
 app.include_router(webhooks_router)
 app.include_router(incidents_router)
 app.include_router(slack_router)
+app.include_router(system_router)

@@ -25,6 +25,7 @@ def _isolate_db(monkeypatch):
         "SLACK_BOT_TOKEN",
         "SLACK_CHANNEL",
         "SLACK_SIGNING_SECRET",
+        "SENTRY_DSN",  # warroom self-monitoring — 테스트가 실 Sentry 호출 금지
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -36,8 +37,10 @@ def _isolate_db(monkeypatch):
     repo_mod.reset_repository()
     deps_mod.reset_github_client()
     deps_mod.reset_slack_notifier()
+    deps_mod.reset_sentry()
     yield
     session_mod.reset_engine()
     repo_mod.reset_repository()
     deps_mod.reset_github_client()
     deps_mod.reset_slack_notifier()
+    deps_mod.reset_sentry()
