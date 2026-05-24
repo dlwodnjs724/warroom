@@ -60,9 +60,9 @@ async def test_webhook_to_approve_full_path(e2e_client):
     repo = get_repository()
     entry = await repo.get(incident_id)
     assert entry is not None, "webhook 후 incident 가 DB 에 없음"
-    assert (
-        entry["status"] == IncidentStatus.AWAITING_APPROVAL
-    ), f"status={entry['status']} — pipeline 이 끝까지 안 갔거나 FAILED 로 떨어짐"
+    actual_status = entry["status"]
+    expected_status = IncidentStatus.AWAITING_APPROVAL
+    assert actual_status == expected_status, f"status={actual_status} (expected {expected_status})"
     assert entry["report"] is not None
     assert entry["report"]["category"] == "code"
     assert entry["report"]["patch_suggestion"], "mock pipeline 이 patch_suggestion 채워줘야 함"
