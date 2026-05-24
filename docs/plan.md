@@ -2,7 +2,7 @@
 
 > 장애 자동 대응 시스템의 최종 비전, 사용자 시나리오, 현재 구조에서 변경 필요한 부분, 단계별 작업 계획.
 >
-> 최초 작성: 2026-05-13 / 최근 갱신: 2026-05-18 (Phase 3 PR 오픈) / 갱신 정책: Phase 완료 시마다 진행 상태 업데이트.
+> 최초 작성: 2026-05-13 / 최근 갱신: 2026-05-24 (Phase 5 잔무 5.5/5.6/5.7 완료) / 갱신 정책: Phase 완료 시마다 진행 상태 업데이트.
 
 ---
 
@@ -10,9 +10,8 @@
 
 > **새 세션이 가장 먼저 볼 영역.** Phase 완료 / 우선순위 변경 시 즉시 갱신.
 
-- **마지막 완료**: **Phase 3 (Slack Interactivity)** 머지 (PR #10, 2026-05-20, 10 commits rebase merge). `/slack/interactions` endpoint (block_actions + view_submission), verify_slack_signature (v0 HMAC + 5분 replay 윈도우), SlackNotifier.open_reject_modal, incidents.rejection_reason 컬럼 + Alembic. 2회 cold review (HIGH 3 + M2 fix). audit 2회로 `api/slack.py` thin layer 분리 + DTO 분리 + layering.md § 7 codify. **204 tests pass** (170 → 204, +34)
-- **이전 완료**: Convention codify + clients/ 그룹핑 (PR #9). PR reliability (PR #8). Architecture follow-up (PR #6). Phase 4 (PR #1)
-- **Phase 3 후속 follow-up 완료** (PR #14 머지 2026-05-20, 5 commits rebase): [#11](https://github.com/dlwodnjs724/warroom/issues/11) signature helpers → services + composition root, [#12](https://github.com/dlwodnjs724/warroom/issues/12) InteractiveNotifier Protocol 분리, [#13](https://github.com/dlwodnjs724/warroom/issues/13) pipeline.py make_notifier composition root 이전. bundle worktree, cold review HIGH/MEDIUM 0건 + LOW 4건 skip (PR comment 명시), 사용자 audit 1건 반영 (`dependencies.py` docstring stale → composition root 책임 + 캐싱 정책 3분류 명시). 204 tests pass 유지
+- **마지막 완료**: **Phase 5 잔무 5.5 / 5.6 / 5.7** (2026-05-24). 5.5 stuck `ANALYZING` → `FAILED` 복구는 이미 구현·테스트된 상태였음 (plan stale 정리). 5.6 e2e 통합 테스트 1건 신설 (`tests/test_e2e_pipeline.py` — webhook → mock pipeline → AWAITING_APPROVAL → approve → PR dry-run). 5.7 GitHub Actions CI (`.github/workflows/ci.yml` — uv setup → ruff format check → ruff check → pytest). **211 tests pass** (+1)
+- **이전 완료**: Phase 3 (Slack Interactivity) 머지 (PR #10, 2026-05-20). Phase 3 후속 follow-up #11/#12/#13 (PR #14, 2026-05-20). Convention codify + clients/ 그룹핑 (PR #9). PR reliability (PR #8). Architecture follow-up (PR #6). Phase 4 (PR #1)
 - **다음 1순위**: **Phase 4.0 / 6.2** — Mock → Real Sentry/GitHub tool. demo 흐름은 mock 으로 작동하나 LLM 분석 품질 ↑ 필요
 - **다음 2순위**: **Phase 6.1** — `print` → `logging` 마이그레이션. `[WARROOM][cleanup]` / `[WARROOM][open_pr]` / `[WARROOM][slack]` / `[pr_builder][ORPHAN]` 같은 prefix 패턴이 누적되어 logger 도입 ROI 큰 시점
 - **Phase 3 후속 follow-up 후보**: 재분석 요청 hook (저장된 rejection_reason 을 컨텍스트로 orchestrator 재실행) — 시스템에 재분석 자체가 없어 별도 이슈로 분리 예정
@@ -268,15 +267,15 @@ Phase 2 진입 전 long-term maintainability 정리.
 - [#4](https://github.com/dlwodnjs724/warroom/issues/4) — `common/diff.py` 분리 (pure parser ↔ subprocess apply)
 - [#5](https://github.com/dlwodnjs724/warroom/issues/5) — `_open_pr` async `to_thread` + `close_pr` observability
 
-### Phase 5 — 문서/시연 + 정리 (1~2시간)
+### Phase 5 — 문서/시연 + 정리
 
 - **5.1** architecture.md 에 incident 라이프사이클 상태 머신
 - **5.2** 발표자료에 vision vs 현재 구현 매트릭스
 - **5.3** demo 시나리오 1개 — webhook → Slack thread → 클릭 → PR
 - **5.4** 본 문서의 사용자 시나리오 다이어그램을 발표 슬라이드로 정리
-- **5.5** Startup 시 stale state 복구 — `ANALYZING` 상태로 stuck 된 incident 를 `FAILED` 로 마킹
-- **5.6** 통합 테스트 1개 — webhook → /approve → PR dry-run 까지 end-to-end
-- **5.7** GitHub Actions CI — pytest + ruff + pre-commit run
+- **5.5** ✅ Startup 시 stale state 복구 — `IncidentRepository.recover_stale_analyzing()` + `gateway/main.py` lifespan wiring + `TestRecoverStaleAnalyzing` 6 케이스 (`no stale / single / multiple / 다른 status 보존 / completed 보존 / mixed`)
+- **5.6** ✅ end-to-end 통합 테스트 — `tests/test_e2e_pipeline.py:test_webhook_to_approve_full_path`. `orchestrator.runner._USE_MOCK` attribute patch + `time.sleep` no-op 으로 4초 → 0초. webhook → background pipeline → AWAITING_APPROVAL + report 영속화 → `/incidents/{id}/approve` → PR dry-run → APPROVED 전 경로 1건
+- **5.7** ✅ GitHub Actions CI — `.github/workflows/ci.yml`. concurrency cancel-in-progress + 10분 timeout. `astral-sh/setup-uv@v3` 캐시 → `uv sync --all-extras --dev` → `ruff format --check` → `ruff check` → `pytest -v`. push/PR to `main` 트리거
 
 ### Phase 6 — 코드 품질 / 운영성 정리 (multi-agent 도입 전 정리)
 
