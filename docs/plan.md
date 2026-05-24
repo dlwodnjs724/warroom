@@ -312,8 +312,8 @@ flowchart LR
 |---|---|---|
 | M2b | Phase 0 + Phase 1 | ✅ |
 | M3a | Phase 2 (Slack 가시성) + Phase 4 (실 코드 변경 PR) | ✅ 2026-05-18 |
-| M3b | Architecture follow-up (#2/#3/#4) + Phase 3 (Slack Interactivity) | ⬜ 진행 예정 |
-| M4 | Phase 5 (문서/시연) + 통합 테스트 + 발표 | ⬜ |
+| M3b | Architecture follow-up (#2/#3/#4) + Phase 3 (Slack Interactivity) | ✅ 2026-05-20 (PR #6 / #10) |
+| M4 | Phase 5 (문서/시연) + 통합 테스트 + 발표 | ✅ 2026-05-24 (5.5/5.6/5.7 머지, 발표·보고서 제출) |
 
 ---
 
@@ -339,10 +339,11 @@ flowchart LR
 
 | 지점 | 상태 |
 |---|---|
-| **Cold-context review** (non-trivial PR 기본 단계) | ✅ 4회 검증 (PR #1 / #6 / #8 머지 직전) — production-grade finding 매번 |
-| Architecture refactor bundle (충돌 매트릭스가 worktree 단일 권장 시) | ✅ 2회 검증 (PR #6 #2/#3/#4, PR #8 #5/#7) |
-| Phase 3 (Slack Interactivity) 머지 직전 보안 리뷰 | ⬜ Phase 3 진입 후 (서명 검증·replay 방지·권한 누락 cold review 강점) |
-| Phase 5.4 발표자료 다듬기 | ⬜ 본 작업과 독립, 병렬 가능 |
+| **Cold-context review** (non-trivial PR 기본 단계) | ✅ 5회 검증 (PR #1 / #6 / #8 / #10 / #14) — production-grade finding 매번 |
+| Architecture refactor bundle (worktree 단일) | ✅ 3회 검증 (PR #6 #2/#3/#4, PR #8 #5/#7, PR #14 #11/#12/#13) |
+| Phase 3 보안 리뷰 (서명 검증·replay 방지·권한) | ✅ PR #10 cold review 2회 (HIGH 3 + M2 fix) |
+| Phase 5.4 발표자료 다듬기 | ✅ 2026-05-21 발표 + 보고서 제출 |
+| **사용자 audit** (책임 분배 / 룰북 누락 검출) | ✅ 3회 가치 확인 (PR #10 layering § 7 신설, PR #14 docstring stale, Phase 5 plan stale) — `.claude/rules/agents.md § 3a` codify |
 
 ---
 

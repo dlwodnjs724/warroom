@@ -1,6 +1,6 @@
 # 프로젝트 기획 및 기술 결정 사항
 
-> 2026-04-09 최초 작성, 2026-05-20 Phase 3 (Slack Interactivity) 머지 / 2026-05-18 Phase 4 (실 코드 변경 PR) 완료 반영
+> 2026-04-09 최초 작성, 2026-05-24 최근 갱신 (Phase 5 잔무 5.5/5.6/5.7 + 발표 직전 핫픽스 audit + Warroom self-monitoring)
 
 ---
 
@@ -73,15 +73,17 @@ Fixer Agent
 
 ## 프로토타입 범위 (Milestone 1)
 
-| 항목 | 현재 (2026-05-18) | 향후 확장 |
+| 항목 | 현재 (2026-05-24) | 향후 확장 |
 |------|-----------|----------|
 | 인시던트 소스 | **Sentry + Datadog** 둘 다 구현 (서명 검증 + dedupe) | PagerDuty 등 추가 시 monitors/ 어댑터만 |
 | 외부 API Tool | **Mock** (orchestrator/tools/) | 실제 Sentry/GitHub API 교체 (Phase 6.2) |
-| ChatOps | **Slack Bot 실 송신** + **Interactivity endpoint** (block_actions / view_submission) | 재분석 요청 (사유 → 컨텍스트 주입) |
-| 승인/반려 | **Slack 버튼 메인 + REST + CLI** (✅ → handle_decision / ❌ → modal → reason 영속화) | — |
-| GitHub PR | **unified diff hybrid PR** (코드 + 분석 리포트), 반려 시 close + branch 삭제 | architecture follow-up: client DI / responsibility 분해 ([#2](https://github.com/dlwodnjs724/warroom/issues/2)/[#3](https://github.com/dlwodnjs724/warroom/issues/3)) |
+| ChatOps | **Slack Bot 실 송신** + **Interactivity** (block_actions / view_submission) + **실 LLM agent 진행 thread emit** (Phase 2.9) + **결정 결과 thread reply + actor mention** | 재분석 요청 (사유 → 컨텍스트 주입) |
+| 승인/반려 | **Slack 버튼 메인 + REST + CLI** (✅ → handle_decision / ❌ → modal → reason 영속화). async endpoint 의 `run_coroutine_threadsafe` self-wait deadlock 해소 (`cc445de`) | — |
+| GitHub PR | **unified diff hybrid PR** (코드 + 분석 리포트), 반려 시 close + branch 삭제 | architecture follow-up: client DI / responsibility 분해 (✅ PR #6/#8/#14) |
 | Secret 보호 | **9개 패턴 redaction** at consumption (Slack/PR body/incident markdown) | 패턴 확장 시 `common/redact.py` 추가 |
 | 티켓/이력 | **MySQL/SQLite (SQLAlchemy)** + 보조 JSON (`pr_number/pr_branch` 컬럼 포함) | Jira API 연동 |
+| **운영성 baseline** | `/healthz` liveness, startup stale `ANALYZING` 복구, Warroom self-monitoring (sentry-sdk, SENTRY_DSN 시), GitHub Actions CI (ruff + pytest) | graceful shutdown, dependabot |
+| **시연 도구** | `scripts/demo_raise.py` — 결제 도메인 결함 패턴을 sentry-sdk 로 capture | — |
 
 ---
 
