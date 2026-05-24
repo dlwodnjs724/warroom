@@ -124,3 +124,7 @@ packages/
 Slack / Sentry / ngrok / GitHub App / LLM provider 전체 단계별 가이드 — [`docs/setup.md`](./docs/setup.md).
 
 App credentials 가 없어도 dry-run 으로 동작 (Slack=콘솔, GitHub=`output/github_payloads.jsonl`, LLM=`MOCK_PIPELINE=true`).
+
+## End-to-End 데모
+
+Sentry → Warroom 분석 → Slack 클릭 → GitHub PR 생성까지 한 호흡 walkthrough — [`docs/demo.md`](./docs/demo.md). 시연 영상용 마스킹 가이드 + 트러블슈팅 매트릭스 포함.
