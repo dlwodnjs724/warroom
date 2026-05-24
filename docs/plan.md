@@ -11,7 +11,10 @@
 > **새 세션이 가장 먼저 볼 영역.** Phase 완료 / 우선순위 변경 시 즉시 갱신.
 
 - **마지막 완료**: **Phase 5 잔무 5.5 / 5.6 / 5.7** (2026-05-24). 5.5 stuck `ANALYZING` → `FAILED` 복구는 이미 구현·테스트된 상태였음 (plan stale 정리). 5.6 e2e 통합 테스트 1건 신설 (`tests/test_e2e_pipeline.py` — webhook → mock pipeline → AWAITING_APPROVAL → approve → PR dry-run). 5.7 GitHub Actions CI (`.github/workflows/ci.yml` — uv setup → ruff format check → ruff check → pytest). **211 tests pass** (+1)
-- **이전 완료**: Phase 3 (Slack Interactivity) 머지 (PR #10, 2026-05-20). Phase 3 후속 follow-up #11/#12/#13 (PR #14, 2026-05-20). Convention codify + clients/ 그룹핑 (PR #9). PR reliability (PR #8). Architecture follow-up (PR #6). Phase 4 (PR #1)
+- **이전 완료** (시간 역순):
+  - **2026-05-21 발표 직전 핫픽스 묶음** (push 만 됨, PR 없음): (a) `decisions.handle_decision` 의 결정 결과 thread reply + actor mention + `run_coroutine_threadsafe` self-wait deadlock 해소 (`cc445de` — async endpoint 가 같은 loop 에 future 던지고 sync `.result()` 대기하던 critical bug, `make_pipeline_notifier(lookup_cb=_lookup_slack_thread)` 교체 + 모든 notifier 호출 `await asyncio.to_thread(...)` wrap), (b) Phase 2.9 실 LLM 경로 (`_run_crew_pipeline`) 에 agent 단위 thread emit 추가 (`1f2ad59`), (c) 시연 도구 `scripts/demo_raise.py` + sentry-sdk/matplotlib 의존 (`508dab5`), (d) Phase 5.5 stuck `ANALYZING` 복구 (`f12cae6`)
+  - **2026-05-20**: Phase 3 (Slack Interactivity) 머지 (PR #10). 후속 follow-up #11/#12/#13 (PR #14)
+  - **이전**: Convention codify + clients/ 그룹핑 (PR #9). PR reliability (PR #8). Architecture follow-up (PR #6). Phase 4 (PR #1)
 - **다음 1순위**: **Phase 4.0 / 6.2** — Mock → Real Sentry/GitHub tool. demo 흐름은 mock 으로 작동하나 LLM 분석 품질 ↑ 필요
 - **다음 2순위**: **Phase 6.1** — `print` → `logging` 마이그레이션. `[WARROOM][cleanup]` / `[WARROOM][open_pr]` / `[WARROOM][slack]` / `[pr_builder][ORPHAN]` 같은 prefix 패턴이 누적되어 logger 도입 ROI 큰 시점
 - **Phase 3 후속 follow-up 후보**: 재분석 요청 hook (저장된 rejection_reason 을 컨텍스트로 orchestrator 재실행) — 시스템에 재분석 자체가 없어 별도 이슈로 분리 예정
@@ -226,7 +229,7 @@ Phase 2 진입 전 long-term maintainability 정리.
 - **2.6** ✅ `Notifier.on_pipeline_failed(incident_id, error)` 추가
 - **2.7** ✅ `_truncate` 를 RCA/patch 에 적용 (section 한도 3000 의 안전버퍼 2500)
 - **2.8** ⚠️ **잔무**: 실 LLM patch 가 거의 항상 한도 초과 (실측 patch=3044, RCA=4146). 채널 본문엔 요약+버튼, thread 에 풀텍스트 reply 로 split 필요. DB/PR body 는 풀텍스트 유지 중 (Slack 표시만 잘림 — 데이터 손실 없음)
-- **2.9** ⚠️ **잔무**: 실 LLM 경로 (`_run_crew_pipeline`) 에 agent 단위 thread reply emit 누락 — `Crew.kickoff()` 사이에 `notifier.on_agent_update` 수동 호출하거나 CrewAI step callback 사용
+- **2.9** ✅ 실 LLM 경로 (`_run_crew_pipeline`) 에 agent 단위 thread reply emit 추가 (`1f2ad59`, 2026-05-21) — Triage / Analyst+Fixer Crew `kickoff()` 전후로 `notifier.on_agent_update` 수동 호출 (분류 중 → 완료, 분석 중 → 완료, 패치 작성 중 → 완료). 직전엔 mock 모드에서만 thread reply 가 보이던 잔무 해소
 - **부수 fix**:
   - `on_incident_received` 가 gateway 에서 한 번도 호출되지 않던 pre-existing 버그 (`4000cfa`)
   - Alembic env.py `%` 인용부호 configparser interpolation ValueError (`26b7d9d`)
