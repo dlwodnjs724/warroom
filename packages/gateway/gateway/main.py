@@ -7,6 +7,7 @@ FastAPI 앱을 조립한다. 책임 분담:
 """
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -31,7 +32,7 @@ from gateway.dependencies import (
 )
 from gateway.infrastructure.db.repository import get_repository
 from gateway.infrastructure.db.session import current_url, init_schema, is_sqlite_backend
-from gateway.services.pipeline import set_main_loop
+from gateway.services.pipeline import drain_in_flight, set_main_loop
 from gateway.services.security import warn_if_secrets_missing
 
 
@@ -69,7 +70,11 @@ async def lifespan(app: FastAPI):
     get_slack_notifier()
 
     yield
-    print("[WARROOM] Gateway 종료")
+    print("[WARROOM] Gateway 종료 — in-flight pipeline drain")
+    grace = float(os.getenv("WARROOM_SHUTDOWN_GRACE_SECONDS", "30.0"))
+    done, cancelled = await drain_in_flight(timeout=grace)
+    if done or cancelled:
+        print(f"[WARROOM] drain — 정상 {done}건 / cancel+FAILED {cancelled}건")
     set_main_loop(None)
     reset_github_client()
     reset_slack_notifier()
