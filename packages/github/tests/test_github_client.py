@@ -540,6 +540,38 @@ class TestAppClientPrimitives:
             client.get_file_content("toby/demo", "a.py", "main")
         assert exc.value.status_code == 401
 
+    def test_list_commits_returns_payload(self, tmp_path, monkeypatch):
+        """list_commits — GET /repos/{repo}/commits?path=&per_page=N."""
+        commits_payload = [
+            {"sha": "abc123", "commit": {"author": {"name": "x", "date": "d"}, "message": "m1"}},
+            {"sha": "def456", "commit": {"author": {"name": "y", "date": "d"}, "message": "m2"}},
+        ]
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_install"}),
+                FakeResponse(payload=commits_payload),
+            ]
+        )
+        client = _make_app_client(tmp_path, monkeypatch, http)
+        result = client.list_commits("toby/demo", "app/x.py", limit=2)
+        assert result == commits_payload
+        # URL 확인
+        get_calls = [c for c in http.calls if c[0] == "GET"]
+        assert any("/commits?path=app/x.py&per_page=2" in c[1] for c in get_calls)
+
+    def test_list_commits_4xx_classified(self, tmp_path, monkeypatch):
+        """list_commits 5xx 도 transient 로 분류 (_check 경로)."""
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_install"}),
+                FakeResponse(status_code=503, payload={}),
+            ]
+        )
+        client = _make_app_client(tmp_path, monkeypatch, http)
+        with pytest.raises(GitHubTransientError) as exc:
+            client.list_commits("toby/demo", "a.py", limit=5)
+        assert exc.value.status_code == 503
+
     def test_token_is_cached_across_calls(self, tmp_path, monkeypatch):
         http = FakeHttp(
             [

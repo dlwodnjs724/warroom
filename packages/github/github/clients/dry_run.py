@@ -38,6 +38,10 @@ class DryRunGitHubClient(GitHubClient):
         """
         raise FileNotFoundError(path)
 
+    def list_commits(self, repo: str, path: str, limit: int = 5) -> list[dict]:
+        """dry-run 은 실 데이터 없음 — empty list. caller 가 mock 텍스트로 폴백."""
+        return []
+
     def commit_files(
         self,
         repo: str,

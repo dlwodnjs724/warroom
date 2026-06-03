@@ -127,6 +127,17 @@ class GitHubAppClient(GitHubClient):
         data = resp.json()
         return base64.b64decode(data["content"]).decode("utf-8")
 
+    def list_commits(self, repo: str, path: str, limit: int = 5) -> list[dict]:
+        """특정 path 의 최근 commit ``limit`` 건. Analyst tool 의 GitHub source 이력."""
+        headers = self._auth_headers()
+        encoded_path = quote(path, safe="/")
+        resp = self._http.get(
+            f"{_API}/repos/{repo}/commits?path={encoded_path}&per_page={int(limit)}",
+            headers=headers,
+        )
+        _check(resp, f"GET /repos/{repo}/commits?path={path}")
+        return resp.json()
+
     def commit_files(
         self,
         repo: str,

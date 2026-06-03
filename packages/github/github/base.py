@@ -75,6 +75,23 @@ class GitHubClient(Protocol):
         """
         ...
 
+    def list_commits(self, repo: str, path: str, limit: int = 5) -> list[dict]:
+        """특정 파일의 최근 commit 이력. Analyst Agent 의 GitHub Source Lookup 용.
+
+        반환 형식 (GitHub REST API ``GET /repos/{repo}/commits?path=``):
+            [{
+                "sha": "abc1234",
+                "commit": {
+                    "author": {"name": "...", "date": "ISO-8601"},
+                    "message": "..."
+                }
+            }, ...]
+
+        dry-run 구현은 empty list 를 반환 (실 데이터 없음 — caller 가 mock 텍스트
+        폴백). 빈 list 와 실 데이터의 차이는 caller 책임.
+        """
+        ...
+
     def commit_files(
         self,
         repo: str,
