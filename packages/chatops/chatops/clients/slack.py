@@ -113,6 +113,16 @@ class SlackNotifier(Notifier):
         if thread:
             channel_id, ts = thread
             self._update_message(channel_id, ts, blocks, text=text)
+            # Phase 2.8 — section text 한도 (3000) 로 잘린 본문을 thread 에 풀텍스트로.
+            # DB / PR body 는 풀텍스트 유지 중. Slack 만 가시화 보강.
+            self._post_full_text_if_truncated(channel_id, ts, "근본 원인", report.root_cause, _RCA_LIMIT)
+            self._post_full_text_if_truncated(
+                channel_id,
+                ts,
+                "패치 제안",
+                redact_secrets(report.patch_suggestion),
+                _PATCH_LIMIT,
+            )
         else:
             # 캐시/DB miss — 원본 갱신 불가, 새 메시지로 송신.
             self._post_message(self._channel, blocks, text=text)
@@ -174,6 +184,23 @@ class SlackNotifier(Notifier):
         self._call_slack("views.open", payload)
 
     # ---------- Internal helpers ----------
+
+    def _post_full_text_if_truncated(
+        self, channel_id: str, ts: str, label: str, content: str, limit: int
+    ) -> None:
+        """본문이 limit 초과면 thread 에 풀텍스트 reply. 아니면 no-op.
+
+        Slack postMessage 의 ``text`` 한도 (~40,000) 가 section 한도 (3,000)
+        보다 훨씬 크므로 단일 reply 로 LLM 출력 전체가 들어간다. 예외적으로
+        그 이상이면 chunk split — 현재는 발생 안 함 (실측 4146).
+        """
+        if len(content) <= limit:
+            return
+        body = f"*{label} (풀 텍스트)*\n```\n{content}\n```"
+        # Slack text 한도 40000 — 보수적 35000 로 자른다 (이중 안전망).
+        if len(body) > 35000:
+            body = body[: 35000 - 4] + "\n…"
+        self._post_message(channel_id, blocks=None, text=body, thread_ts=ts)
 
     def _get_thread(self, incident_id: str) -> tuple[str, str] | None:
         cached = self._threads.get(incident_id)

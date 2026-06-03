@@ -306,10 +306,109 @@ class TestTruncation:
             IncidentEvent(incident_id="x", source="sentry", title="t", raw_payload={})
         )
         notifier.on_resolution_ready(rep)
-        blocks = fake.calls[-1][2]["blocks"]
+        # chat.update 의 blocks 에서 잘린 RCA 검증
+        update_call = next(c for c in fake.calls if c[0].endswith("/chat.update"))
+        blocks = update_call[2]["blocks"]
         rca_block = next(
             b
             for b in blocks
             if b.get("type") == "section" and "근본 원인" in b.get("text", {}).get("text", "")
         )
         assert "…" in rca_block["text"]["text"]
+
+
+class TestThreadFullTextSplit:
+    """Phase 2.8 — section 한도 초과 시 thread 에 풀텍스트 reply."""
+
+    def test_short_rca_no_thread_reply(self, event):
+        """RCA 가 한도 이하면 thread reply 안 만든다."""
+        rep = ResolutionReport(
+            incident_id=event.incident_id,
+            severity=Severity.HIGH,
+            triage_summary="",
+            root_cause="짧은 원인",  # cap 이하
+            patch_suggestion="",
+            post_mortem_draft="",
+        )
+        fake = _FakeSlack()
+        notifier = SlackNotifier(bot_token="xoxb-test", channel="#x", http_client=fake)
+        notifier.on_incident_received(event)
+        notifier.on_resolution_ready(rep)
+
+        # 2 호출만 — incident postMessage + chat.update. thread reply 없음.
+        assert len(fake.calls) == 2
+        assert fake.calls[0][0].endswith("/chat.postMessage")
+        assert fake.calls[1][0].endswith("/chat.update")
+
+    def test_long_rca_emits_thread_full_text(self, event):
+        """RCA 가 한도 초과 → chat.update + thread postMessage(풀텍스트) 송신."""
+        long_rca = "원인" * 2000  # 8000 chars, 2500 cap 초과
+        rep = ResolutionReport(
+            incident_id=event.incident_id,
+            severity=Severity.HIGH,
+            triage_summary="",
+            root_cause=long_rca,
+            patch_suggestion="",
+            post_mortem_draft="",
+        )
+        fake = _FakeSlack()
+        notifier = SlackNotifier(bot_token="xoxb-test", channel="#x", http_client=fake)
+        notifier.on_incident_received(event)
+        notifier.on_resolution_ready(rep)
+
+        # 3 호출: incident postMessage + chat.update + thread postMessage(RCA full)
+        assert len(fake.calls) == 3
+        thread_call = fake.calls[2]
+        assert thread_call[0].endswith("/chat.postMessage")
+        payload = thread_call[2]
+        assert payload.get("thread_ts"), "thread reply 여야 함"
+        assert "근본 원인 (풀 텍스트)" in payload["text"]
+        # 풀텍스트 전체가 들어감 (truncate 없음)
+        assert long_rca in payload["text"]
+
+    def test_long_patch_emits_thread_full_text_after_redact(self, event):
+        """patch 풀텍스트는 redaction 거친 뒤 thread 로."""
+        long_patch = "diff line\n" * 400  # ~3600 chars, cap 초과
+        leaked = "sk-" + "a" * 48  # OpenAI 패턴
+        long_patch_with_secret = leaked + "\n" + long_patch
+        rep = ResolutionReport(
+            incident_id=event.incident_id,
+            severity=Severity.HIGH,
+            triage_summary="",
+            root_cause="",
+            patch_suggestion=long_patch_with_secret,
+            post_mortem_draft="",
+        )
+        fake = _FakeSlack()
+        notifier = SlackNotifier(bot_token="xoxb-test", channel="#x", http_client=fake)
+        notifier.on_incident_received(event)
+        notifier.on_resolution_ready(rep)
+
+        thread_calls = [c for c in fake.calls if c[2].get("thread_ts")]
+        assert len(thread_calls) == 1
+        body = thread_calls[0][2]["text"]
+        assert "패치 제안 (풀 텍스트)" in body
+        assert leaked not in body, "secret 패턴 redaction 통과해야 함"
+        assert "[REDACTED:openai_api_key]" in body
+
+    def test_long_rca_and_patch_emit_two_thread_replies(self, event):
+        long_rca = "원인" * 2000
+        long_patch = "patch line\n" * 400
+        rep = ResolutionReport(
+            incident_id=event.incident_id,
+            severity=Severity.HIGH,
+            triage_summary="",
+            root_cause=long_rca,
+            patch_suggestion=long_patch,
+            post_mortem_draft="",
+        )
+        fake = _FakeSlack()
+        notifier = SlackNotifier(bot_token="xoxb-test", channel="#x", http_client=fake)
+        notifier.on_incident_received(event)
+        notifier.on_resolution_ready(rep)
+
+        thread_calls = [c for c in fake.calls if c[2].get("thread_ts")]
+        assert len(thread_calls) == 2
+        labels = [c[2]["text"][:30] for c in thread_calls]
+        assert any("근본 원인" in lbl for lbl in labels)
+        assert any("패치 제안" in lbl for lbl in labels)
