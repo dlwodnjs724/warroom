@@ -26,6 +26,8 @@ def _isolate_db(monkeypatch):
         "SLACK_CHANNEL",
         "SLACK_SIGNING_SECRET",
         "SENTRY_DSN",  # warroom self-monitoring — 테스트가 실 Sentry 호출 금지
+        "SENTRY_AUTH_TOKEN",  # Phase 6.2 Sentry tool — 테스트가 실 API 호출 금지
+        "SENTRY_ORG",
     ):
         monkeypatch.delenv(var, raising=False)
 
