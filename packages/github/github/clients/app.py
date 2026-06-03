@@ -13,33 +13,62 @@ primitive (``get_file_content`` / ``commit_files`` / ``open_pr`` / ``close_pr``)
 
 import base64
 import time
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from urllib.parse import quote
 
 import httpx
 import jwt
+from common.clock import now as _clock_now
 
 from ..base import GitHubAuthError, GitHubClient, GitHubError, GitHubTransientError
 
 _API = "https://api.github.com"
 
 
-def _classify_status(status_code: int, context: str) -> GitHubError:
+def _parse_retry_after(value: str | None) -> float | None:
+    """``Retry-After`` 헤더 → seconds.
+
+    RFC 7231 의 두 형태 지원:
+        - delay-seconds (정수): ``"120"`` → 120.0
+        - HTTP-date: ``"Wed, 21 Oct 2026 07:28:00 GMT"`` → 현재 시각과의 차이
+
+    파싱 실패 / 빈 값 → None. 음수는 0.0 으로 clamp (이미 지난 시점).
+    """
+    if not value:
+        return None
+    stripped = value.strip()
+    if stripped.isdigit():
+        return float(stripped)
+    try:
+        dt = parsedate_to_datetime(stripped)
+    except (TypeError, ValueError):
+        return None
+    if dt is None:
+        return None
+    delta = (dt - _clock_now()).total_seconds()
+    return max(0.0, delta)
+
+
+def _classify_status(status_code: int, context: str, retry_after: float | None = None) -> GitHubError:
     """HTTP status → 운영 의미가 분리된 예외.
 
     호출자는 ``GitHubAuthError`` (토큰/권한 — 재시도 무의미) 와
     ``GitHubTransientError`` (5xx / 429 rate-limit — 재시도 가치 있음) 를
-    구분해 surface 한다.
+    구분해 surface 한다. ``retry_after`` 는 transient 의 ``Retry-After`` hint.
 
     참고: GitHub 의 *secondary* rate-limit 은 403 + ``X-RateLimit-Remaining: 0``
     헤더로 오는데 — 현 구현은 본문 status 만 보므로 그 케이스는 ``GitHubAuthError``
-    로 분류된다. 운영에서 재시도 결정 시 헤더 확인 필요 (TODO: header-aware 분류).
+    로 분류된다. primary rate-limit (429) / 5xx 는 ``Retry-After`` 헤더가
+    있으면 ``retry_after`` 로 surface.
     """
     if status_code in (401, 403):
         return GitHubAuthError(f"{context}: 인증/권한 실패 (status={status_code})", status_code)
     if status_code == 429 or 500 <= status_code < 600:
         return GitHubTransientError(
-            f"{context}: GitHub 측 일시 장애 / rate-limit (status={status_code})", status_code
+            f"{context}: GitHub 측 일시 장애 / rate-limit (status={status_code})",
+            status_code,
+            retry_after=retry_after,
         )
     return GitHubError(f"{context}: HTTP {status_code}", status_code)
 
@@ -50,10 +79,14 @@ def _check(resp: httpx.Response, context: str) -> None:
     bare ``resp.raise_for_status()`` 대체. 모든 transport primitive 가 이 한
     helper 만 거치면 호출자가 토큰 만료 / rate-limit / 일시 장애를 동일 패턴
     (``try/except GitHubAuthError / GitHubTransientError``) 으로 처리 가능.
+
+    transient (429 / 5xx) 케이스는 ``Retry-After`` 헤더를 파싱해 hint 로
+    예외에 attach — 호출자가 backoff 결정 시 사용.
     """
     if 200 <= resp.status_code < 300:
         return
-    raise _classify_status(resp.status_code, context)
+    retry_after = _parse_retry_after(resp.headers.get("Retry-After"))
+    raise _classify_status(resp.status_code, context, retry_after=retry_after)
 
 
 class GitHubAppClient(GitHubClient):
@@ -148,7 +181,11 @@ class GitHubAppClient(GitHubClient):
             json={"state": "closed"},
         )
         if close_resp.status_code not in (200, 404, 422):
-            raise _classify_status(close_resp.status_code, f"PATCH /repos/{repo}/pulls/{pr_number}")
+            raise _classify_status(
+                close_resp.status_code,
+                f"PATCH /repos/{repo}/pulls/{pr_number}",
+                retry_after=_parse_retry_after(close_resp.headers.get("Retry-After")),
+            )
 
         self._delete_ref(repo, branch, headers)
         print(f"[GitHubAppClient] PR #{pr_number} closed + branch {branch} 삭제")
@@ -168,7 +205,11 @@ class GitHubAppClient(GitHubClient):
             headers=headers,
         )
         if del_resp.status_code not in (204, 404, 422):
-            raise _classify_status(del_resp.status_code, f"DELETE /repos/{repo}/git/refs/heads/{branch}")
+            raise _classify_status(
+                del_resp.status_code,
+                f"DELETE /repos/{repo}/git/refs/heads/{branch}",
+                retry_after=_parse_retry_after(del_resp.headers.get("Retry-After")),
+            )
 
     # ------- auth ------------------------------------------------------------
 

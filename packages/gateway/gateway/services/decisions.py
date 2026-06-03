@@ -121,21 +121,26 @@ async def handle_decision(
             }
             return JSONResponse(response)
         except GitHubTransientError as e:
+            retry_hint = f" retry_after={e.retry_after}s" if e.retry_after is not None else ""
             print(
                 f"[WARROOM][open_pr] {incident_id} PR 생성 실패 — "
-                f"error_type=transient status_code={e.status_code} (재시도 가치 있음): {e}"
+                f"error_type=transient status_code={e.status_code}{retry_hint} (재시도 가치 있음): {e}"
             )
             await asyncio.to_thread(
                 notifier.on_agent_update,
                 incident_id,
                 "WARROOM",
-                f"⚠️ PR 생성 실패 (transient, {e.status_code}) — 재시도 가치 있음",
+                f"⚠️ PR 생성 실패 (transient, {e.status_code}) — 재시도 가치 있음"
+                + (f" / {int(e.retry_after)}초 후 재시도 권장" if e.retry_after else ""),
             )
-            response["pull_request"] = {
+            pr_payload = {
                 "error": str(e),
                 "error_type": "transient",
                 "status_code": e.status_code,
             }
+            if e.retry_after is not None:
+                pr_payload["retry_after"] = e.retry_after
+            response["pull_request"] = pr_payload
             return JSONResponse(response)
         except GitHubError as e:
             print(
@@ -245,17 +250,21 @@ async def _close_pr_if_exists(
             "status_code": e.status_code,
         }
     except GitHubTransientError as e:
+        retry_hint = f" retry_after={e.retry_after}s" if e.retry_after is not None else ""
         print(
             f"[WARROOM][cleanup] PR #{pr_number} close 실패 — "
-            f"error_type=transient status_code={e.status_code} (재시도 가치 있음): {e}"
+            f"error_type=transient status_code={e.status_code}{retry_hint} (재시도 가치 있음): {e}"
         )
-        return {
+        result = {
             "number": pr_number,
             "branch": branch,
             "error": str(e),
             "error_type": "transient",
             "status_code": e.status_code,
         }
+        if e.retry_after is not None:
+            result["retry_after"] = e.retry_after
+        return result
     except GitHubError as e:
         print(
             f"[WARROOM][cleanup] PR #{pr_number} close 실패 — "

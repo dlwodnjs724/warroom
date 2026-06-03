@@ -44,7 +44,15 @@ class GitHubAuthError(GitHubError):
 
 
 class GitHubTransientError(GitHubError):
-    """5xx — GitHub 측 일시 장애 / 레이트리밋. 잠시 후 재시도 가능."""
+    """5xx / 429 — GitHub 측 일시 장애 / rate-limit. 잠시 후 재시도 가능.
+
+    ``retry_after`` 는 ``Retry-After`` 헤더의 hint (초). 없으면 None —
+    호출자가 자체 backoff 전략 (exponential 등) 사용.
+    """
+
+    def __init__(self, message: str, status_code: int, retry_after: float | None = None):
+        super().__init__(message, status_code)
+        self.retry_after = retry_after
 
 
 class GitHubClient(Protocol):

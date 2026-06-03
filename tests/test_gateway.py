@@ -357,6 +357,28 @@ class TestRejectPrCleanup:
         pr = resp.json()["pull_request"]
         assert pr["error_type"] == "transient"
         assert pr["status_code"] == 429
+        # Retry-After hint 가 없는 경우 retry_after 키 자체가 응답에서 빠진다.
+        assert "retry_after" not in pr
+
+    async def test_approve_open_pr_transient_with_retry_after_surfaces_hint(self, client, monkeypatch):
+        """transient + Retry-After 헤더가 있으면 응답 dict 에 retry_after 키 노출."""
+        from gateway.services import decisions as dec_mod
+        from github.base import GitHubTransientError
+
+        monkeypatch.setenv("GITHUB_REPO", "owner/demo")
+        incident_id = await self._seed_awaiting("INC-APPROVE-RETRY-1")
+
+        def boom(entry, client, github_repo):
+            raise GitHubTransientError("rate-limit", 429, retry_after=45.0)
+
+        monkeypatch.setattr(dec_mod, "_open_pr", boom)
+
+        resp = client.post(f"/incidents/{incident_id}/approve")
+        assert resp.status_code == 200
+        pr = resp.json()["pull_request"]
+        assert pr["error_type"] == "transient"
+        assert pr["status_code"] == 429
+        assert pr["retry_after"] == 45.0
 
     async def test_reject_close_pr_auth_error_surfaces_status_code(self, client, monkeypatch):
         """close_pr 가 401/403 일 때 error_type=auth + status_code 응답."""
@@ -413,6 +435,32 @@ class TestRejectPrCleanup:
         pr_closed = resp.json()["pr_closed"]
         assert pr_closed["error_type"] == "transient"
         assert pr_closed["status_code"] == 502
+        assert "retry_after" not in pr_closed  # hint 없을 때 키 누락
+
+    async def test_reject_close_pr_transient_with_retry_after_surfaces_hint(self, client, monkeypatch):
+        """close_pr 의 transient + Retry-After → pr_closed dict 에 retry_after."""
+        from gateway.dependencies import get_github_client, reset_github_client
+        from gateway.infrastructure.db.repository import get_repository
+        from github.base import GitHubTransientError
+
+        monkeypatch.setenv("GITHUB_REPO", "owner/demo")
+        reset_github_client()
+
+        incident_id = await self._seed_awaiting("INC-CLOSE-RETRY-1")
+        repo = get_repository()
+        await repo.set_pr_info(incident_id, 77, "warroom/incident-RETRY")
+
+        ghc = get_github_client()
+
+        def boom(repo, pr_number, branch):
+            raise GitHubTransientError("rate-limit", 429, retry_after=15.0)
+
+        monkeypatch.setattr(ghc, "close_pr", boom)
+
+        resp = client.post(f"/incidents/{incident_id}/reject")
+        assert resp.status_code == 200
+        pr_closed = resp.json()["pr_closed"]
+        assert pr_closed["retry_after"] == 15.0
 
     async def test_reject_close_pr_offloaded_via_to_thread(self, client, monkeypatch):
         """close_pr (sync httpx) 가 ``asyncio.to_thread`` 로 워커 스레드 위임된다.

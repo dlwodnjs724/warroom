@@ -126,9 +126,15 @@ MIIEpAIBAAKCAQEAvZ7vF9z7XJzDqGqz8nLk7K7HfqJL6f8VqJfQ8X9R1Gq3kVQv
 
 
 class FakeResponse:
-    def __init__(self, status_code: int = 200, payload: dict | None = None):
+    def __init__(
+        self,
+        status_code: int = 200,
+        payload: dict | None = None,
+        headers: dict | None = None,
+    ):
         self.status_code = status_code
         self._payload = payload or {}
+        self.headers = headers or {}
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -415,6 +421,85 @@ class TestAppClientPrimitives:
         with pytest.raises(GitHubTransientError) as exc:
             client.close_pr("toby/demo", 42, "x")
         assert exc.value.status_code == 429
+        # Retry-After 헤더가 없으면 hint 도 None
+        assert exc.value.retry_after is None
+
+    def test_429_with_retry_after_seconds_header(self, tmp_path, monkeypatch):
+        """429 + ``Retry-After: 120`` → transient.retry_after=120.0."""
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_install"}),
+                FakeResponse(status_code=429, headers={"Retry-After": "120"}),
+            ]
+        )
+        client = _make_app_client(tmp_path, monkeypatch, http)
+        with pytest.raises(GitHubTransientError) as exc:
+            client.open_pr("toby/demo", "head", "main", "t", "b")
+        assert exc.value.status_code == 429
+        assert exc.value.retry_after == 120.0
+
+    def test_503_with_retry_after_http_date(self, tmp_path, monkeypatch):
+        """5xx + ``Retry-After: <HTTP-date>`` → seconds 차이로 변환."""
+        from datetime import UTC, timedelta
+        from email.utils import format_datetime
+
+        from common.clock import now
+
+        # APP_TZ 가 UTC 아닐 수 있어 명시 변환 (format_datetime usegmt 요구).
+        future = (now().replace(microsecond=0) + timedelta(seconds=65)).astimezone(UTC)
+        date_header = format_datetime(future, usegmt=True)
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_install"}),
+                FakeResponse(status_code=503, headers={"Retry-After": date_header}),
+            ]
+        )
+        client = _make_app_client(tmp_path, monkeypatch, http)
+        with pytest.raises(GitHubTransientError) as exc:
+            client.open_pr("toby/demo", "head", "main", "t", "b")
+        assert exc.value.status_code == 503
+        # 파싱 정밀도 ±5초 허용 (테스트 실행 시점 변동)
+        assert exc.value.retry_after is not None
+        assert 55.0 <= exc.value.retry_after <= 70.0
+
+    def test_retry_after_garbage_value_returns_none(self, tmp_path, monkeypatch):
+        """Retry-After 가 파싱 불가능한 값이면 retry_after=None (silent fallback)."""
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_install"}),
+                FakeResponse(status_code=429, headers={"Retry-After": "not-a-date"}),
+            ]
+        )
+        client = _make_app_client(tmp_path, monkeypatch, http)
+        with pytest.raises(GitHubTransientError) as exc:
+            client.open_pr("toby/demo", "head", "main", "t", "b")
+        assert exc.value.retry_after is None
+
+    def test_close_pr_502_with_retry_after_surfaces_hint(self, tmp_path, monkeypatch):
+        """close_pr 도 Retry-After 헤더를 surface (open_pr 와 대칭)."""
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_install"}),
+                FakeResponse(status_code=502, headers={"Retry-After": "30"}),
+            ]
+        )
+        client = _make_app_client(tmp_path, monkeypatch, http)
+        with pytest.raises(GitHubTransientError) as exc:
+            client.close_pr("toby/demo", 99, "warroom/x")
+        assert exc.value.retry_after == 30.0
+
+    def test_auth_error_does_not_have_retry_after_attribute(self, tmp_path, monkeypatch):
+        """401/403 은 AuthError (재시도 무의미) — retry_after 속성 없음."""
+        http = FakeHttp(
+            [
+                FakeResponse(payload={"token": "ghs_install"}),
+                FakeResponse(status_code=403, headers={"Retry-After": "60"}),
+            ]
+        )
+        client = _make_app_client(tmp_path, monkeypatch, http)
+        with pytest.raises(GitHubAuthError) as exc:
+            client.open_pr("toby/demo", "head", "main", "t", "b")
+        assert not hasattr(exc.value, "retry_after")
 
     def test_open_pr_403_raises_auth_error(self, tmp_path, monkeypatch):
         """approve 경로 transport (open_pr) 도 close_pr 와 동일 분류 — cold review MEDIUM 1."""
