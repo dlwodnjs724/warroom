@@ -10,13 +10,15 @@
 
 > **새 세션이 가장 먼저 볼 영역.** Phase 완료 / 우선순위 변경 시 즉시 갱신.
 
-- **마지막 완료**: **Phase 5 잔무 5.5 / 5.6 / 5.7** (2026-05-24). 5.5 stuck `ANALYZING` → `FAILED` 복구는 이미 구현·테스트된 상태였음 (plan stale 정리). 5.6 e2e 통합 테스트 1건 신설 (`tests/test_e2e_pipeline.py` — webhook → mock pipeline → AWAITING_APPROVAL → approve → PR dry-run). 5.7 GitHub Actions CI (`.github/workflows/ci.yml` — uv setup → ruff format check → ruff check → pytest). **211 tests pass** (+1)
+- **마지막 완료**: **Phase 4.0 / 6.2** (Mock → Real Sentry/GitHub tool, 2026-06-03). `orchestrator/tools/sentry.py` 가 `SENTRY_AUTH_TOKEN` 설정 시 실 Sentry REST API (`/issues/{id}/` + `/events/latest/`) 호출, `tools/github.py` 가 `make_github_client()` 의 `list_commits` (Protocol 확장) + `get_file_content` 활용. 양쪽 모두 미설정 / 호출 실패 시 mock fallback (LLM tool 표면 보호). **248 tests pass** (+18)
+- **2026-06-03 자율 묶음 진행**: #15 dependabot + pre-commit autoupdate, #14 graceful shutdown (in-flight drain + cancel/FAILED), #3 Phase 2.8 thread 풀텍스트 split, #9 Retry-After header-aware backoff hint, #6 Node.js 24 actions 업그레이드, #4 architecture state machine docs, #8 plan/decisions stale 정리, #11 Warroom self-monitoring (sentry-sdk), #12 데모 README, #13 /healthz
+- **이전 완료**: Phase 5 잔무 5.5 / 5.6 / 5.7 (2026-05-24, 211 pass). 5.5 stuck `ANALYZING` 복구 + 5.6 e2e 테스트 + 5.7 GitHub Actions CI
 - **이전 완료** (시간 역순):
   - **2026-05-21 발표 직전 핫픽스 묶음** (push 만 됨, PR 없음): (a) `decisions.handle_decision` 의 결정 결과 thread reply + actor mention + `run_coroutine_threadsafe` self-wait deadlock 해소 (`cc445de` — async endpoint 가 같은 loop 에 future 던지고 sync `.result()` 대기하던 critical bug, `make_pipeline_notifier(lookup_cb=_lookup_slack_thread)` 교체 + 모든 notifier 호출 `await asyncio.to_thread(...)` wrap), (b) Phase 2.9 실 LLM 경로 (`_run_crew_pipeline`) 에 agent 단위 thread emit 추가 (`1f2ad59`), (c) 시연 도구 `scripts/demo_raise.py` + sentry-sdk/matplotlib 의존 (`508dab5`), (d) Phase 5.5 stuck `ANALYZING` 복구 (`f12cae6`)
   - **2026-05-20**: Phase 3 (Slack Interactivity) 머지 (PR #10). 후속 follow-up #11/#12/#13 (PR #14)
   - **이전**: Convention codify + clients/ 그룹핑 (PR #9). PR reliability (PR #8). Architecture follow-up (PR #6). Phase 4 (PR #1)
-- **다음 1순위**: **Phase 4.0 / 6.2** — Mock → Real Sentry/GitHub tool. demo 흐름은 mock 으로 작동하나 LLM 분석 품질 ↑ 필요
-- **다음 2순위**: **Phase 6.1** — `print` → `logging` 마이그레이션. `[WARROOM][cleanup]` / `[WARROOM][open_pr]` / `[WARROOM][slack]` / `[pr_builder][ORPHAN]` 같은 prefix 패턴이 누적되어 logger 도입 ROI 큰 시점
+- **다음 1순위**: **Phase 6.1** — `print` → `logging` 마이그레이션. `[WARROOM][cleanup]` / `[WARROOM][open_pr]` / `[WARROOM][slack]` / `[pr_builder][ORPHAN]` 같은 prefix 패턴이 누적되어 logger 도입 ROI 큰 시점. 사용자 GO 신호 후 진행 (memory deferred)
+- **다음 2순위**: **Phase 3 후속 — 재분석 hook**. 저장된 `rejection_reason` 을 컨텍스트로 orchestrator 재실행. architecture 변경 동반, 큰 단독 작업이라 별도 세션 권장
 - **Phase 3 후속 follow-up 후보**: 재분석 요청 hook (저장된 rejection_reason 을 컨텍스트로 orchestrator 재실행) — 시스템에 재분석 자체가 없어 별도 이슈로 분리 예정
 - **사용자 명시 deferred**: weekly report (사용자가 "리포트는 잠시 대기" 라고 함 — 신호 받을 때까지 대기)
 
@@ -285,7 +287,7 @@ Phase 2 진입 전 long-term maintainability 정리.
 다음 작업들은 데모 임팩트는 없지만 **이후 multi-agent / agent team 작업 진입 전에 정돈해두면 ROI 큰** 항목들. cold-context agent 가 안정적으로 작업하려면 룰 + 일관성이 잡혀 있어야 함.
 
 - **6.1** `print` → `logging` 마이그레이션 — 전 패키지. structured (JSON for prod) vs human (dev) 분기. log level env 제어. 영향 범위: gateway/main, services/*, infrastructure/*, chatops/slack, github/app
-- **6.2** orchestrator Sentry/GitHub tool 을 실 API 호출로 교체 — `orchestrator/tools/sentry.py` 가 현재 mock 데이터 하드코딩. Analyst agent 의 분석 품질에 직접 영향. **Phase 4 와 시너지** (실 코드 변경 + 실 Sentry 데이터 = 진짜 분석)
+- **6.2** ✅ 2026-06-03 — orchestrator Sentry/GitHub tool 실 API 교체. `SENTRY_AUTH_TOKEN` (Internal Integration Bearer) 으로 `/issues/{id}/` + `/events/latest/` 호출, GitHub 는 `GitHubAppClient.list_commits` + `get_file_content` 활용. 둘 다 mock fallback 으로 demo 흐름 보존
 
 ---
 
