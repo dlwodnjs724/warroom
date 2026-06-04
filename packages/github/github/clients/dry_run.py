@@ -10,10 +10,13 @@ transport primitive 호출을 JSONL 페이로드로 기록하고, ``commit_files
 """
 
 import json
+import logging
 import os
 from pathlib import Path
 
 from ..base import GitHubClient
+
+logger = logging.getLogger(__name__)
 
 
 class DryRunGitHubClient(GitHubClient):
@@ -85,18 +88,18 @@ class DryRunGitHubClient(GitHubClient):
         }
         self._append_payload(payload)
         url = f"dry-run://github/{repo}/pull?branch={branch}"
-        print(f"[GitHubClient:dry-run] {repo} ← PR 페이로드 기록")
+        logger.info("dry-run %s ← PR 페이로드 기록", repo)
         return {"html_url": url, "number": None}
 
     def close_pr(self, repo: str, pr_number: int, branch: str) -> None:
         payload = {"action": "close_pr", "repo": repo, "pr_number": pr_number, "branch": branch}
         self._append_payload(payload)
-        print(f"[GitHubClient:dry-run] {repo} close_pr #{pr_number} branch={branch}")
+        logger.info("dry-run %s close_pr #%s branch=%s", repo, pr_number, branch)
 
     def delete_branch(self, repo: str, branch: str) -> None:
         payload = {"action": "delete_branch", "repo": repo, "branch": branch}
         self._append_payload(payload)
-        print(f"[GitHubClient:dry-run] {repo} delete_branch {branch}")
+        logger.info("dry-run %s delete_branch %s", repo, branch)
 
     def _append_payload(self, payload: dict) -> None:
         self._payload_log.parent.mkdir(parents=True, exist_ok=True)

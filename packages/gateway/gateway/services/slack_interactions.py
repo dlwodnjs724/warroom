@@ -10,11 +10,14 @@ api/slack.py 는 HTTP boundary (서명 검증 + body parse) 만 책임지고, �
 """
 
 import asyncio
+import logging
 
 from fastapi import BackgroundTasks, HTTPException
 
 from gateway.dependencies import get_slack_notifier
 from gateway.services.decisions import handle_decision
+
+logger = logging.getLogger(__name__)
 
 
 async def dispatch(payload: dict, background_tasks: BackgroundTasks) -> None:
@@ -50,7 +53,7 @@ async def _handle_block_actions(payload: dict, background_tasks: BackgroundTasks
     # incident_id 는 approve / reject 양쪽 모두 필요한 공통 요구사항.
     # 누락된 페이로드는 silent skip — Slack 4xx retry 트리거 방지.
     if not incident_id:
-        print(f"[WARROOM][slack] {action_id!r} — incident_id (action.value) 누락, skip")
+        logger.warning("%r — incident_id (action.value) 누락, skip", action_id)
         return
 
     if action_id == "warroom_approve":
@@ -60,7 +63,7 @@ async def _handle_block_actions(payload: dict, background_tasks: BackgroundTasks
     if action_id == "warroom_reject":
         trigger_id = payload.get("trigger_id") or ""
         if not trigger_id:
-            print(f"[WARROOM][slack] reject 버튼 — trigger_id 누락 (incident={incident_id!r})")
+            logger.warning("reject 버튼 — trigger_id 누락 (incident=%r)", incident_id)
             return
         notifier = get_slack_notifier()
         await asyncio.to_thread(notifier.open_reject_modal, trigger_id, incident_id)
@@ -95,9 +98,9 @@ async def _approve_in_background(incident_id: str, actor_user_id: str | None) ->
     try:
         await handle_decision(incident_id, approved=True, actor_user_id=actor_user_id)
     except HTTPException as e:
-        print(f"[WARROOM][slack] approve {incident_id} 실패 — status={e.status_code} detail={e.detail}")
-    except Exception as e:
-        print(f"[WARROOM][slack] approve {incident_id} 예외: {e}")
+        logger.warning("approve %s 실패 — status=%s detail=%s", incident_id, e.status_code, e.detail)
+    except Exception:
+        logger.exception("approve %s 예외", incident_id)
 
 
 async def _reject_in_background(incident_id: str, reason: str | None, actor_user_id: str | None) -> None:
@@ -106,6 +109,6 @@ async def _reject_in_background(incident_id: str, reason: str | None, actor_user
             incident_id, approved=False, rejection_reason=reason, actor_user_id=actor_user_id
         )
     except HTTPException as e:
-        print(f"[WARROOM][slack] reject {incident_id} 실패 — status={e.status_code} detail={e.detail}")
-    except Exception as e:
-        print(f"[WARROOM][slack] reject {incident_id} 예외: {e}")
+        logger.warning("reject %s 실패 — status=%s detail=%s", incident_id, e.status_code, e.detail)
+    except Exception:
+        logger.exception("reject %s 예외", incident_id)

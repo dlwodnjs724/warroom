@@ -13,6 +13,8 @@
 호출, base64 인코딩 등 transport 디테일은 클라이언트 구현이 책임진다.
 """
 
+import logging
+
 from common.diff import changed_paths, extract_diff, is_new_file
 from common.models import ResolutionReport
 from common.redact import redact_secrets
@@ -20,6 +22,8 @@ from common.redact import redact_secrets
 from .base import GitHubClient, PullRequestResult
 from .patch import apply_diff, verify_apply
 from .report import branch_name, incident_markdown, pr_body, pr_title
+
+logger = logging.getLogger(__name__)
 
 
 class DiffApplyError(RuntimeError):
@@ -41,7 +45,7 @@ def build_patch_pr(
         try:
             return _build_diff_pr(client, report, diff, repo, base_branch)
         except DiffApplyError as e:
-            print(f"[pr_builder] diff 흐름 실패, markdown 폴백: {e}")
+            logger.warning("diff 흐름 실패, markdown 폴백: %s", e)
 
     return _build_markdown_only_pr(client, report, repo, base_branch)
 
@@ -75,15 +79,22 @@ def _open_pr_or_cleanup(
     except Exception as open_err:
         try:
             client.delete_branch(repo, branch)
-            print(f"[pr_builder] open_pr 실패 — orphan branch {repo}@{branch} 정리 완료: {open_err}")
+            logger.warning(
+                "open_pr 실패 — orphan branch %s@%s 정리 완료: %s",
+                repo,
+                branch,
+                open_err,
+            )
         except Exception as cleanup_err:
             # 운영자가 반드시 인지해야 함 — GitHub 에 orphan branch 가 남는다.
-            # repo + branch 둘 다 포함 → 그대로 paste 해 수동 삭제 가능:
-            #   gh api -X DELETE /repos/{repo}/git/refs/heads/{branch}
-            print(
-                f"[pr_builder][ORPHAN] open_pr 실패 + branch 정리 실패 "
-                f"— 수동 삭제 필요: gh api -X DELETE /repos/{repo}/git/refs/heads/{branch} "
-                f"(open_err={open_err}, cleanup_err={cleanup_err})"
+            # 그대로 paste 해 수동 삭제 가능: gh api -X DELETE /repos/{repo}/git/refs/heads/{branch}
+            logger.error(
+                "ORPHAN open_pr 실패 + branch 정리 실패 — 수동 삭제 필요: "
+                "gh api -X DELETE /repos/%s/git/refs/heads/%s (open_err=%s, cleanup_err=%s)",
+                repo,
+                branch,
+                open_err,
+                cleanup_err,
             )
         raise
 
@@ -147,7 +158,7 @@ def _build_diff_pr(
         title=pr_title(report),
         body=pr_body(report),
     )
-    print(f"[pr_builder] diff PR 생성 완료: {pr['html_url']} (변경 {len(paths)} 파일)")
+    logger.info("diff PR 생성 완료: %s (변경 %d 파일)", pr["html_url"], len(paths))
     return PullRequestResult(
         pr_url=pr["html_url"],
         pr_number=pr["number"],
@@ -178,7 +189,7 @@ def _build_markdown_only_pr(
         title=pr_title(report),
         body=pr_body(report),
     )
-    print(f"[pr_builder] markdown PR 생성 완료: {pr['html_url']}")
+    logger.info("markdown PR 생성 완료: %s", pr["html_url"])
     return PullRequestResult(
         pr_url=pr["html_url"],
         pr_number=pr["number"],

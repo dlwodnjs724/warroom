@@ -17,8 +17,11 @@ services layer 의 함수는 ``os.getenv`` 를 직접 호출하지 않는다 (la
 
 import hashlib
 import hmac
+import logging
 
 from common.clock import now as _now
+
+logger = logging.getLogger(__name__)
 
 _SLACK_REPLAY_WINDOW_SEC = 60 * 5
 
@@ -103,7 +106,7 @@ def warn_if_secrets_missing(
         if not value
     ]
     if missing:
-        print(
-            f"[WARROOM] 경고: 다음 webhook 서명 검증이 비활성화되어 있습니다 — {', '.join(missing)}. "
-            "운영 환경에서는 반드시 설정하세요."
+        logger.warning(
+            "webhook 서명 검증이 비활성화되어 있습니다 — %s. 운영 환경에서는 반드시 설정하세요.",
+            ", ".join(missing),
         )

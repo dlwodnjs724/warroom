@@ -8,10 +8,13 @@ caller (Analyst Agent) 가 분기할 의미 있는 예외 없음 — LLM tool �
 broad except → mock fallback. (sentry tool 과 동일 패턴 — 룰 § 4b 면제)
 """
 
+import logging
 import os
 
 from crewai.tools import tool
 from github.clients.factory import make_github_client
+
+logger = logging.getLogger(__name__)
 
 
 def _mock_response(file_path: str) -> str:
@@ -68,7 +71,7 @@ def github_source_lookup(file_path: str) -> str:
     try:
         commits = client.list_commits(repo, file_path, limit=5)
     except Exception as e:
-        print(f"[orchestrator.tools.github] {file_path} list_commits 실패 — mock 폴백: {e}")
+        logger.warning("%s list_commits 실패 — mock 폴백: %s", file_path, e)
         return _mock_response(file_path)
 
     body = _format_commits(file_path, commits)
@@ -81,6 +84,6 @@ def github_source_lookup(file_path: str) -> str:
     except FileNotFoundError:
         body += f"\n\n파일 {file_path} 가 HEAD 에 존재하지 않음 (삭제됐거나 path 오타)."
     except Exception as e:
-        print(f"[orchestrator.tools.github] {file_path} get_file_content 실패 (생략): {e}")
+        logger.warning("%s get_file_content 실패 (생략): %s", file_path, e)
 
     return body

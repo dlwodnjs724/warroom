@@ -12,6 +12,7 @@ primitive (``get_file_content`` / ``commit_files`` / ``open_pr`` / ``close_pr``)
 """
 
 import base64
+import logging
 import time
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -22,6 +23,8 @@ import jwt
 from common.clock import now as _clock_now
 
 from ..base import GitHubAuthError, GitHubClient, GitHubError, GitHubTransientError
+
+logger = logging.getLogger(__name__)
 
 _API = "https://api.github.com"
 
@@ -199,7 +202,7 @@ class GitHubAppClient(GitHubClient):
             )
 
         self._delete_ref(repo, branch, headers)
-        print(f"[GitHubAppClient] PR #{pr_number} closed + branch {branch} 삭제")
+        logger.info("PR #%s closed + branch %s 삭제", pr_number, branch)
 
     def delete_branch(self, repo: str, branch: str) -> None:
         """branch 단독 삭제 — ``open_pr`` 실패 후 orphan cleanup 용."""

@@ -1,6 +1,7 @@
 """Human-in-the-Loop 승인/반려 결정 + 승인 시 GitHub PR 트리거."""
 
 import asyncio
+import logging
 from datetime import datetime
 
 from common.models import IncidentCategory, IncidentStatus, ResolutionReport, Severity
@@ -13,6 +14,8 @@ from github.pr_builder import build_patch_pr
 from gateway.dependencies import get_github_client, get_github_repo, make_pipeline_notifier
 from gateway.infrastructure.db.repository import get_repository
 from gateway.services.pipeline import _lookup_slack_thread
+
+logger = logging.getLogger(__name__)
 
 # rejection_reason 은 Slack modal 자유 입력 → DB 영속화 + HTTP 응답 echo + 추후 LLM
 # 컨텍스트 주입 (재분석 hook 도입 시) 까지 흐르므로, secrets.md § 3 의 redaction
@@ -52,9 +55,14 @@ async def handle_decision(
 
     action = "승인" if approved else "반려"
     if reason_to_persist:
-        print(f"[WARROOM] 인시던트 {incident_id} {action} 처리 완료 (사유: {reason_to_persist})")
+        logger.info(
+            "인시던트 %s %s 처리 완료 (사유: %s)",
+            incident_id,
+            action,
+            reason_to_persist,
+        )
     else:
-        print(f"[WARROOM] 인시던트 {incident_id} {action} 처리 완료")
+        logger.info("인시던트 %s %s 처리 완료", incident_id, action)
 
     # Slack thread 에 결정 사실 + (반려 시) 사유 echo. PR 결과는 PR 생성/close 직후
     # 추가 reply 로 송신. notifier 가 dry-run (token 없음) 이면 stdout JSONL 만 찍힘.
@@ -104,9 +112,11 @@ async def handle_decision(
         try:
             pr_result = await asyncio.to_thread(_open_pr, entry, github_client, github_repo)
         except GitHubAuthError as e:
-            print(
-                f"[WARROOM][open_pr] {incident_id} PR 생성 실패 — "
-                f"error_type=auth status_code={e.status_code} (토큰 회전 / 권한 점검 필요): {e}"
+            logger.warning(
+                "open_pr %s PR 생성 실패 — error_type=auth status_code=%s (토큰 회전 / 권한 점검 필요): %s",
+                incident_id,
+                e.status_code,
+                e,
             )
             await asyncio.to_thread(
                 notifier.on_agent_update,
@@ -122,9 +132,12 @@ async def handle_decision(
             return JSONResponse(response)
         except GitHubTransientError as e:
             retry_hint = f" retry_after={e.retry_after}s" if e.retry_after is not None else ""
-            print(
-                f"[WARROOM][open_pr] {incident_id} PR 생성 실패 — "
-                f"error_type=transient status_code={e.status_code}{retry_hint} (재시도 가치 있음): {e}"
+            logger.warning(
+                "open_pr %s PR 생성 실패 — error_type=transient status_code=%s%s (재시도 가치 있음): %s",
+                incident_id,
+                e.status_code,
+                retry_hint,
+                e,
             )
             await asyncio.to_thread(
                 notifier.on_agent_update,
@@ -143,9 +156,11 @@ async def handle_decision(
             response["pull_request"] = pr_payload
             return JSONResponse(response)
         except GitHubError as e:
-            print(
-                f"[WARROOM][open_pr] {incident_id} PR 생성 실패 — "
-                f"error_type=http status_code={e.status_code}: {e}"
+            logger.warning(
+                "open_pr %s PR 생성 실패 — error_type=http status_code=%s: %s",
+                incident_id,
+                e.status_code,
+                e,
             )
             await asyncio.to_thread(
                 notifier.on_agent_update,
@@ -166,10 +181,12 @@ async def handle_decision(
             # warning 으로 surface 하고 endpoint 는 정상 응답.
             try:
                 await repo.set_pr_info(incident_id, pr_result["number"], pr_result["branch"])
-            except Exception as e:
-                print(
-                    f"[WARROOM] PR 영속화 실패 — incident_id={incident_id} "
-                    f"pr_number={pr_result['number']} branch={pr_result['branch']}: {e}"
+            except Exception:
+                logger.exception(
+                    "PR 영속화 실패 — incident_id=%s pr_number=%s branch=%s",
+                    incident_id,
+                    pr_result["number"],
+                    pr_result["branch"],
                 )
                 pr_result["pr_persist_warning"] = (
                     "PR 생성 성공했으나 DB 기록 실패. 반려 시 자동 cleanup 불가 — 수동 close 필요."
@@ -238,9 +255,11 @@ async def _close_pr_if_exists(
     try:
         await asyncio.to_thread(client.close_pr, github_repo, pr_number, branch)
     except GitHubAuthError as e:
-        print(
-            f"[WARROOM][cleanup] PR #{pr_number} close 실패 — "
-            f"error_type=auth status_code={e.status_code} (토큰 회전 / 권한 점검 필요): {e}"
+        logger.warning(
+            "cleanup PR #%s close 실패 — error_type=auth status_code=%s (토큰 회전 / 권한 점검 필요): %s",
+            pr_number,
+            e.status_code,
+            e,
         )
         return {
             "number": pr_number,
@@ -251,9 +270,12 @@ async def _close_pr_if_exists(
         }
     except GitHubTransientError as e:
         retry_hint = f" retry_after={e.retry_after}s" if e.retry_after is not None else ""
-        print(
-            f"[WARROOM][cleanup] PR #{pr_number} close 실패 — "
-            f"error_type=transient status_code={e.status_code}{retry_hint} (재시도 가치 있음): {e}"
+        logger.warning(
+            "cleanup PR #%s close 실패 — error_type=transient status_code=%s%s (재시도 가치 있음): %s",
+            pr_number,
+            e.status_code,
+            retry_hint,
+            e,
         )
         result = {
             "number": pr_number,
@@ -266,9 +288,11 @@ async def _close_pr_if_exists(
             result["retry_after"] = e.retry_after
         return result
     except GitHubError as e:
-        print(
-            f"[WARROOM][cleanup] PR #{pr_number} close 실패 — "
-            f"error_type=http status_code={e.status_code}: {e}"
+        logger.warning(
+            "cleanup PR #%s close 실패 — error_type=http status_code=%s: %s",
+            pr_number,
+            e.status_code,
+            e,
         )
         return {
             "number": pr_number,
@@ -279,7 +303,7 @@ async def _close_pr_if_exists(
         }
     except Exception as e:
         # 분류 안 된 예외 (네트워크 타임아웃 등 transport 레벨) — best-effort surface.
-        print(f"[WARROOM][cleanup] PR #{pr_number} close 실패 — error_type=unknown: {e}")
+        logger.warning("cleanup PR #%s close 실패 — error_type=unknown: %s", pr_number, e)
         return {
             "number": pr_number,
             "branch": branch,
@@ -296,17 +320,17 @@ def _open_pr(
 ) -> dict | None:
     """승인된 인시던트로 PR 을 만든다. GITHUB_REPO 미설정 시 skip."""
     if not github_repo:
-        print("[WARROOM] GITHUB_REPO 미설정 — PR 생성 건너뜀")
+        logger.info("GITHUB_REPO 미설정 — PR 생성 건너뜀")
         return None
 
     report_dict = entry.get("report")
     if not report_dict:
-        print("[WARROOM] 리포트가 없어 PR 생성 건너뜀")
+        logger.info("리포트가 없어 PR 생성 건너뜀")
         return None
 
     category = report_dict.get("category", "code")
     if category != "code":
-        print(f"[WARROOM] 카테고리 '{category}' — 코드 외 장애로 PR 생성 건너뜀")
+        logger.info("카테고리 '%s' — 코드 외 장애로 PR 생성 건너뜀", category)
         return {"skipped": True, "reason": f"category={category}"}
 
     created_at = report_dict["created_at"]

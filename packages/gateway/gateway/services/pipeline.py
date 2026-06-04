@@ -12,10 +12,13 @@ Graceful shutdown — in-flight pipeline 추적: ``_in_flight`` (incident_id →
 """
 
 import asyncio
+import logging
 
 from common.models import IncidentEvent, IncidentStatus
 
 from gateway.infrastructure.db.repository import get_repository
+
+logger = logging.getLogger(__name__)
 
 _main_loop: asyncio.AbstractEventLoop | None = None
 _in_flight: dict[str, asyncio.Task] = {}
@@ -71,12 +74,12 @@ async def run_incident_pipeline(event: IncidentEvent) -> None:
         # 여기서 update_status 하면 cancel 후 새 await 발생해 코루틴이 재실행됨.
         raise
     except Exception as e:
-        print(f"[ERROR] 파이프라인 실패 ({event.incident_id}): {e}")
+        logger.exception("파이프라인 실패 (%s): %s", event.incident_id, e)
         await repo.update_status(event.incident_id, IncidentStatus.FAILED)
         try:
             await asyncio.to_thread(notifier.on_pipeline_failed, event.incident_id, str(e))
-        except Exception as cb_err:
-            print(f"[ERROR] on_pipeline_failed 콜백 실패: {cb_err}")
+        except Exception:
+            logger.exception("on_pipeline_failed 콜백 실패")
     finally:
         _in_flight.pop(event.incident_id, None)
 
@@ -107,7 +110,7 @@ async def drain_in_flight(timeout: float = 30.0) -> tuple[int, int]:
         for inc_id in cancelled_ids:
             try:
                 await repo.update_status(inc_id, IncidentStatus.FAILED)
-            except Exception as e:
-                print(f"[WARROOM] shutdown FAILED 마킹 실패 ({inc_id}): {e}")
+            except Exception:
+                logger.exception("shutdown FAILED 마킹 실패 (%s)", inc_id)
 
     return len(done), len(cancelled_ids)

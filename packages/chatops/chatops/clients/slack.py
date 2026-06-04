@@ -20,6 +20,7 @@ DB 영속화는 콜백을 통해 외부 (gateway main loop) 에 위임한다.
 """
 
 import json
+import logging
 import os
 from collections.abc import Callable
 from pathlib import Path
@@ -29,6 +30,8 @@ from common.models import IncidentEvent, ResolutionReport
 from common.redact import redact_secrets
 
 from ..base import Notifier
+
+logger = logging.getLogger(__name__)
 
 _SEV_EMOJI = {
     "CRITICAL": "🔥",
@@ -89,8 +92,8 @@ class SlackNotifier(Notifier):
             if self._persist:
                 try:
                     self._persist(event.incident_id, channel_id, ts)
-                except Exception as e:
-                    print(f"[SlackNotifier] thread 영속화 실패: {e}")
+                except Exception:
+                    logger.exception("thread 영속화 실패")
 
     def on_agent_update(self, incident_id: str, agent_name: str, message: str) -> None:
         thread = self._get_thread(incident_id)
@@ -210,7 +213,7 @@ class SlackNotifier(Notifier):
             try:
                 resolved = self._lookup(incident_id)
             except Exception as e:
-                print(f"[SlackNotifier] thread lookup 실패: {e}")
+                logger.warning("thread lookup 실패: %s", e)
                 return None
             if resolved:
                 self._threads[incident_id] = resolved
@@ -258,7 +261,7 @@ class SlackNotifier(Notifier):
             data = resp.json()
             if not data.get("ok"):
                 err = data.get("error", "unknown")
-                print(f"[SlackNotifier] {method} 실패: {err} — dry-run 로 폴백")
+                logger.warning("%s 실패: %s — dry-run 로 폴백", method, err)
                 self._log_payload({"_api": method, "_error": err, **payload})
                 return None
             channel = data.get("channel")
@@ -267,7 +270,7 @@ class SlackNotifier(Notifier):
                 return channel, ts
             return None
         except Exception as e:
-            print(f"[SlackNotifier] {method} 예외: {e} — dry-run 로 폴백")
+            logger.warning("%s 예외: %s — dry-run 로 폴백", method, e)
             self._log_payload({"_api": method, "_exception": str(e), **payload})
             return None
 
@@ -276,7 +279,7 @@ class SlackNotifier(Notifier):
         with self._dry_run_log.open("a", encoding="utf-8") as f:
             f.write(json.dumps(payload, ensure_ascii=False) + "\n")
         api = payload.get("_api", "?")
-        print(f"[SlackNotifier:dry-run] {api} → {self._dry_run_log}")
+        logger.info("dry-run %s → %s", api, self._dry_run_log)
 
     # ---------- Block builders ----------
 

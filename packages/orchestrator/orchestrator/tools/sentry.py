@@ -8,10 +8,13 @@ Bearer auth). 미설정 / 호출 실패 시 mock 응답으로 자동 fallback �
 caller 가 분기할 의미 있는 예외가 없다 — 모든 비정상은 mock 텍스트로 surface.
 """
 
+import logging
 import os
 
 import httpx
 from crewai.tools import tool
+
+logger = logging.getLogger(__name__)
 
 _SENTRY_API = "https://sentry.io/api/0"
 _TIMEOUT = 10.0
@@ -119,9 +122,9 @@ def sentry_issue_lookup(issue_id: str) -> str:
                 event = event_resp.json()
             except Exception as e:
                 # event 누락은 치명적이지 않음 — 메타만으로도 분석 가능.
-                print(f"[orchestrator.tools.sentry] {issue_id} event lookup 실패: {e}")
+                logger.warning("%s event lookup 실패: %s", issue_id, e)
     except Exception as e:
-        print(f"[orchestrator.tools.sentry] {issue_id} lookup 실패 — mock 폴백: {e}")
+        logger.warning("%s lookup 실패 — mock 폴백: %s", issue_id, e)
         return _mock_response(issue_id)
 
     return _format_issue(issue, event)

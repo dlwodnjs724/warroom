@@ -19,9 +19,11 @@ import sys
 from pathlib import Path
 
 from common.clock import now
+from common.logging import configure_logging
 from dotenv import load_dotenv
 
 load_dotenv()
+configure_logging()
 
 _USE_MOCK = os.getenv("MOCK_PIPELINE", "false").lower() == "true"
 
